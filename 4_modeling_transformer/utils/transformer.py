@@ -17,7 +17,7 @@ class SimpleTransformerRec(nn.Module):
         seq_len: int = 10,
         n_heads: int = 2,
         n_layers: int = 2,
-        y_output_dims: Dict[str, int] = None,
+        output_dims: Dict[str, int] = None,
         global_pool: Literal["last", "avg", "max", "sum"] = "sum",
     ):
         """
@@ -26,12 +26,12 @@ class SimpleTransformerRec(nn.Module):
         :param seq_len: 시퀀스 길이
         :param n_heads: Attention head
         :param n_layers: Transformer Encoder 레이어 수
-        :param y_output_dims: Target Label 클래스 수
+        :param output_dims: Target Label 클래스 수
         :param global_pool: 임베딩 값 출력 방식
         """
 
         super(SimpleTransformerRec, self).__init__()
-        self.n_tasks = len(y_output_dims)
+        self.n_tasks = len(output_dims)
         self.seq_len = seq_len
         self.global_pool = global_pool
         self.embeddings = nn.ModuleDict(
@@ -52,7 +52,7 @@ class SimpleTransformerRec(nn.Module):
         self.towers = nn.ModuleDict(
             {
                 feature_name: nn.Linear(embedding_dim, n_classes)
-                for feature_name, n_classes in y_output_dims.items()
+                for feature_name, n_classes in output_dims.items()
             }
         )
 
