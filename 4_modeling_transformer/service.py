@@ -2,6 +2,7 @@ import os
 import bentoml
 from bentoml.io import JSON
 from pathlib import Path
+from typing import List, Dict
 
 from utils.model import Model
 
@@ -17,6 +18,6 @@ svc = bentoml.Service("rec_service")
 
 
 @svc.api(input=JSON(), output=JSON())
-def predict(input_data: list) -> dict:
+def predict(input_data: List[Dict[str, any]]) -> dict:
     results = model.predict(input_data)
     return {"predictions": results}
