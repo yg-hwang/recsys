@@ -6,31 +6,52 @@ from pathlib import Path
 from typing import Dict, Union, List
 
 from .transformer import SimpleTransformerRec
+from .regressor import MultiOutputRegressor
 
 
 class Model:
     def __init__(self, model_dir: Union[str, Path], padding_value: int = 0):
 
         self.model_dir = Path(model_dir).resolve()
-        f = open(model_dir.joinpath("checkpoint/model_config.json"))
-        self.model_config = json.load(f)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.model = SimpleTransformerRec(**self.model_config)
-        self.model.load_state_dict(
+        # ---------- Model: Transformer ---------- #
+        model = "transformer"
+        f = open(self.model_dir.joinpath(f"{model}/checkpoint/model_config.json"))
+        self.seq_model_config = json.load(f)
+
+        self.seq_model = SimpleTransformerRec(**self.seq_model_config)
+        self.seq_model.load_state_dict(
             torch.load(
-                f=model_dir.joinpath("checkpoint/model.pt"),
+                f=model_dir.joinpath(f"{model}/checkpoint/model.pt"),
                 map_location=torch.device(self.device),
                 weights_only=True,
             )
         )
-        self.model = self.model.to(self.device)
+        self.seq_model = self.seq_model.to(self.device)
         self.padding_value = padding_value
 
         self.encoder = {
-            feature: joblib.load(model_dir.joinpath(f"label_encoders/{feature}.joblib"))
-            for feature in self.model_config["feature_dims"].keys()
+            feature: joblib.load(
+                model_dir.joinpath(f"{model}/label_encoders/{feature}.joblib")
+            )
+            for feature in self.seq_model_config["feature_dims"].keys()
         }
+
+        # ---------- Model: Regressor ---------- #
+        model = "regressor"
+        f = open(self.model_dir.joinpath(f"{model}/checkpoint/model_config.json"))
+        self.reg_model_config = json.load(f)
+
+        self.reg_model = MultiOutputRegressor(**self.reg_model_config)
+        self.reg_model.load_state_dict(
+            torch.load(
+                f=model_dir.joinpath(f"{model}/checkpoint/model.pt"),
+                map_location=torch.device(self.device),
+                weights_only=True,
+            )
+        )
+        self.reg_model = self.reg_model.to(self.device)
 
     def preprocess(self, body: Dict[str, any]):
         """
@@ -83,23 +104,23 @@ class Model:
 
         for key in feature_sequences.keys():
             seq = feature_sequences[key]
-            if len(seq) < self.model.seq_len:
-                seq.extend([self.padding_value] * (self.model.seq_len - len(seq)))
+            if len(seq) < self.seq_model.seq_len:
+                seq.extend([self.padding_value] * (self.seq_model.seq_len - len(seq)))
             else:
-                seq = seq[: self.model.seq_len]
+                seq = seq[: self.seq_model.seq_len]
             feature_sequences[key] = (
                 torch.from_numpy(np.array(seq, dtype=np.int32))
-                .reshape(1, self.model.seq_len)
+                .reshape(1, self.seq_model.seq_len)
                 .to(self.device)
             )
 
-        if len(masks) < self.model.seq_len:
-            masks.extend([1] * (self.model.seq_len - len(masks)))
+        if len(masks) < self.seq_model.seq_len:
+            masks.extend([1] * (self.seq_model.seq_len - len(masks)))
         else:
-            masks = masks[: self.model.seq_len]
+            masks = masks[: self.seq_model.seq_len]
         masks = (
             torch.from_numpy(np.array(masks, dtype=np.float32))
-            .reshape(1, self.model.seq_len)
+            .reshape(1, self.seq_model.seq_len)
             .to(self.device)
         )
 
@@ -129,12 +150,14 @@ class Model:
 
         for d in input_data:
             data = self.preprocess(body=d)
-            outputs = {target: [] for target in self.model_config["output_dims"].keys()}
+            outputs = {
+                target: [] for target in self.seq_model_config["output_dims"].keys()
+            }
             with torch.no_grad():
-                self.model.eval()
-                user_vector, y_preds = self.model(**data["inputs"])
+                self.seq_model.eval()
+                seq_vector, y_preds = self.seq_model(**data["inputs"])
 
-            for target, dim in self.model_config["output_dims"].items():
+            for target, dim in self.seq_model_config["output_dims"].items():
                 y_pred = y_preds[target]
                 y_pred = y_pred.permute(1, 0, 2).reshape(-1, dim)
                 y_pred = y_pred.argmax(dim=-1)
@@ -143,14 +166,26 @@ class Model:
 
                 outputs[target] = sorted(list(set(y_pred)))
 
-            user_vector = user_vector.squeeze(0).detach().cpu().numpy()
-            user_vector = user_vector / np.linalg.norm(user_vector)
+            seq_vector = seq_vector.squeeze(0).detach().cpu().numpy()
+            seq_vector = seq_vector / np.linalg.norm(seq_vector)
+
+            with torch.no_grad():
+                self.reg_model.eval()
+                item_vector = (
+                    self.reg_model(
+                        torch.from_numpy(seq_vector).to(self.device).unsqueeze(0)
+                    )
+                    .squeeze()
+                    .detach()
+                    .numpy()
+                )
 
             results.append(
                 {
                     "user_id": data["user_id"],
                     "outputs": outputs,
-                    "user_vector": user_vector.tolist(),
+                    "seq_vector": seq_vector.tolist(),
+                    "item_vector": item_vector.tolist(),
                 }
             )
 

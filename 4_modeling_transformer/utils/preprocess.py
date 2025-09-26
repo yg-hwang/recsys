@@ -338,3 +338,15 @@ class SequentialDataset(Dataset):
         # target이 없으면 feature, mask만 반환 (추론용)
         else:
             return feature_sequences, self.masks[idx]
+
+
+class SequenceVectorDataset(Dataset):
+    def __init__(self, item_id: np.ndarray, seq_vector: np.ndarray, device: str):
+        self.item_id = torch.from_numpy(item_id).to(device)
+        self.seq_vector = torch.from_numpy(seq_vector).to(device)
+
+    def __len__(self):
+        return len(self.item_id)
+
+    def __getitem__(self, idx):
+        return self.item_id[idx], self.seq_vector[idx]
