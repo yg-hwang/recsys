@@ -3,7 +3,7 @@
 ## 2. Dataset
 ## 3. Modeling - LightGCN
 ## 4. Modeling - Transformer
-## 5. Vector Search
+## 5. serving
 ## 6. Evaluation
 ## 7. Ranker
 ## 8. User Clustering
