@@ -9,7 +9,7 @@ from utils.model import Model
 DOMAIN = "fashion"
 current_dir = os.path.abspath(os.curdir)
 base_dir = "/".join(current_dir.split("/")[:-1])
-model_dir = Path(base_dir).joinpath(f"data/model/{DOMAIN}/transformer")
+model_dir = Path(base_dir).joinpath(f"data/model/{DOMAIN}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model = Model(model_dir=model_dir)
 
