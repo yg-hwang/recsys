@@ -1,0 +1,23 @@
+{
+    "seq_len": 4,
+    "feature_dims": {
+        "color": 18,
+        "style": 13,
+        "fit": 8,
+        "material": 16,
+        "season": 7,
+        "sleeve": 8,
+        "category": 23
+    },
+    "embedding_dim": 64,
+    "output_dims": {
+        "color": 18,
+        "style": 13,
+        "fit": 8,
+        "material": 16,
+        "season": 7,
+        "sleeve": 8,
+        "category": 23
+    },
+    "global_pool": "sum"
+}
