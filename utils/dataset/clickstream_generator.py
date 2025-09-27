@@ -85,7 +85,7 @@ def generate_clickstream(
     item_metadata_path: str,
     user_metadata_path: str,
     save_path: Path,
-    users_per_partition: int,
+    users_per_chunk: int,
     n_sessions_per_user: int,
     actions: List[str],
     action_weights: List[float],
@@ -113,9 +113,9 @@ def generate_clickstream(
     ), "user_metadata에는 `user_id` 컬럼이 존재해야 합니다."
     user_ids = df_users["user_id"].tolist()
 
-    # 파티션별 클릭스트림 생성
-    part = 0
-    for start in range(0, len(user_ids), users_per_partition):
+    # chunk별 클릭스트림 생성
+    chunk = 0
+    for start in range(0, len(user_ids), users_per_chunk):
         generator = ClickstreamGenerator(
             df_item_metadata=df_item_metadata,
             df_user_metadata=df_users,
@@ -127,10 +127,10 @@ def generate_clickstream(
         )
 
         user_logs = []
-        batch_user_ids = user_ids[start : start + users_per_partition]
+        batch_user_ids = user_ids[start : start + users_per_chunk]
         for u in batch_user_ids:
             user_logs.extend(generator.simulate_user_sessions(u))
 
-        df_part = pd.DataFrame(user_logs)
-        df_part.to_parquet(save_path.joinpath(f"part_{part:03d}"))
-        part += 1
+        df_chunk = pd.DataFrame(user_logs)
+        df_chunk.to_parquet(save_path.joinpath(f"chunk_{chunk:03d}"))
+        chunk += 1
