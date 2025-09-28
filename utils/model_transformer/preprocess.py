@@ -20,8 +20,8 @@ class FeatureLabelEncoder(LabelEncoder):
 
     def __init__(self):
         super().__init__()
-        self._all_classes = {}
-        self._all_encoders = {}
+        self._all_classes = {}  # 컬럼별 고유 클래스(Label) 저장
+        self._all_encoders = {}  # 컬럼별 LabelEncoder 객체 저장
 
     def fit(self, df: pd.DataFrame):
         """
@@ -56,7 +56,7 @@ class FeatureLabelEncoder(LabelEncoder):
         for column in sorted(df.columns):
             values = df.loc[:, column].to_numpy()
             encoded_values = self._all_encoders[column].transform(values)
-            df.loc[:, column] = encoded_values
+            df.loc[:, column] = encoded_values  # 정수 인코딩된 값으로 덮어쓰기
         logging.debug(">>> Encoding completed.")
 
         return df
@@ -71,7 +71,7 @@ class FeatureLabelEncoder(LabelEncoder):
             decoded_values = self._all_encoders[column].inverse_transform(
                 df.loc[:, column].to_list()
             )
-            df[column] = decoded_values
+            df[column] = decoded_values  # 원본 값으로 되돌림
 
         return df
 
@@ -94,6 +94,10 @@ class SequenceGenerator:
         partition_by: str = None,
     ):
         """
+        시퀀스 데이터셋 생성 클래스
+        - 개별 유저의 행동 로그를 시퀀스 형태로 변환
+        - Transformer 등 Sequential 모델 학습에 필요한 입력 형식으로 준비
+
         :param max_seq_len: 시퀀스 최대 길이 (초과하면 잘라내고, 부족하면 패딩)
         :param user_id: 유저 식별 컬럼명
         :param item_id: 상품 식별 컬럼명
@@ -106,7 +110,7 @@ class SequenceGenerator:
         self.order_by = order_by
         self.partition_by = partition_by
 
-        # # 시퀀스 feature 컬럼명 저장
+        # 시퀀스 feature 컬럼명 저장
         self.features = None
 
         # target label 컬럼명 저장
@@ -150,8 +154,8 @@ class SequenceGenerator:
 
     def _sort_dataframe(self, data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        유저별 시퀀스 정렬 및 user_rn (유저 내 row 번호) 생성
-        - user_rn은 시퀀스 내 몇 번째 이벤트인지 나타냄
+        유저별 시퀀스 정렬 및 유저 내 row 번호(`user_rn`) 생성
+        - `user_rn`은 시퀀스 내 몇 번째 이벤트인지 나타냄
         """
 
         data = data.sort_values([self.user_id, self.order_by])
@@ -191,23 +195,28 @@ class SequenceGenerator:
     ) -> pd.DataFrame:
         """
         DataFrame을 시퀀스 데이터셋으로 변환
+        - 유저별 행동 데이터를 rolling window처럼 시퀀스로 변환
+        - padding/mask/target까지 포함된 구조로 반환
 
-        :param data: Column-based DataFrame
-        :param feature_sequences: Sequential Dataset으로 생성할 컬럼
-        :param output_targets: Sequential Dataset으로 생성할 컬럼 중 Target Label 컬럼
+        :param data: 입력 DataFrame (user_id, item_id, timestamp 포함)
+        :param feature_sequences: 시퀀스로 만들 feature 컬럼 리스트
+        :param output_targets: Target Label로 사용할 feature 컬럼 리스트
         """
 
+        # (1) 필수 컬럼 체크
         self._check_columns(data)
 
+        # (2) 정렬 + user_rn 생성
         data, data_output = self._sort_dataframe(data)
 
         self.features = []
         self.targets = []
 
+        # (3) feature별 시퀀스 생성
         for idx, col_name in enumerate(feature_sequences):
             self.features.append(col_name)
 
-            # groupby-rolling 대신 custom 누적 시퀀스 생성
+            # 유저별 누적 시퀀스 생성
             df_seq = (
                 data.groupby(self.user_id)[col_name]
                 .apply(
@@ -222,7 +231,7 @@ class SequenceGenerator:
             df_seq = df_seq.apply(list)
 
             if idx == 0:
-                # 시퀀스 길이
+                # 첫 feature 처리 시 seq_len, mask 추가
                 seq_len = df_seq.apply(len)
                 mask = df_seq.apply(self._create_mask)
                 df_seq = df_seq.apply(self._add_padding)
@@ -232,20 +241,21 @@ class SequenceGenerator:
                 data_output.loc[:, col_name] = df_seq
 
             else:
+                # 이후 feature는 패딩만 적용
                 df_seq = df_seq.apply(self._add_padding)
                 data_output[col_name] = df_seq
 
-            # target 생성
+            # (4) target 생성 (다음 시점 label)
             if output_targets is not None and col_name in output_targets:
                 target = f"y_{col_name}"
                 self.targets.append(target)
                 data_output.loc[:, target] = (
                     data.groupby(self.user_id)[col_name]
-                    .shift(-1)
+                    .shift(-1)  # 다음 아이템을 target으로 설정
                     .reset_index(level=0, drop=True)
                 )
 
-        # 최종 컬럼 정리
+        # (5) 최종 DataFrame 컬럼 정리
         columns = (
             [self.user_id, self.item_id, "user_rn", "seq_len", "mask"]
             + self.features
@@ -254,6 +264,7 @@ class SequenceGenerator:
         if self.partition_by is not None:
             columns.append(self.partition_by)
 
+        # 정렬 & index 리셋
         data_output = (
             data_output[columns]
             .sort_values([self.user_id, "user_rn"])
@@ -272,21 +283,28 @@ class SequentialDataset(Dataset):
     ):
         """
         Pandas DataFrame을 torch Dataset으로 변환
+        (DataLoader에서 batch 단위 텐서 추출 가능)
 
         :param df: 시퀀스 데이터셋 (SequenceGenerator 결과)
-        :param feature_sequences: 입력 feature로 사용할 컬럼명 리스트
-        :param targets: target label로 사용할 컬럼명 리스트
+        :param feature_sequences: 입력 feature로 사용할 컬럼명
+        :param targets: 예측할 target label 컬럼명
         :param device: 텐서를 저장할 장치 (CPU/GPU)
         """
 
+        # {컬럼명: torch.Tensor} 딕셔너리
         self.feature_sequences: Dict[str, torch.Tensor] = {}
+
+        # 마스크 텐서 (패딩 여부: 0=실제값, 1=패딩)
         self.masks: torch.Tensor
+
+        # target label 텐서
         self.targets: Union[Dict[str, torch.Tensor], None] = {}
 
         # ---------- feature 시퀀스 준비 ---------- #
         for feature in feature_sequences:
             if feature == "mask":
-                # mask는 float32 (0=실제, 1=패딩) -> 모델 attention mask에 직접 활용
+                # mask 컬럼: float32 (Transformer attention mask용)
+                # shape = (num_samples, max_seq_len)
                 x = np.array([np.array(x).astype(np.float32) for x in df[feature]])
                 self.masks = torch.from_numpy(x).to(device)
             else:
@@ -297,11 +315,12 @@ class SequentialDataset(Dataset):
         # ---------- target label ---------- #
         if targets is not None:
             for target in targets:
-                # float32로 변환 (분류 문제라면 이후 모델에서 softmax/CE loss 사용)
+                # target은 float32로 변환 (CE Loss, BCE Loss 등에서 활용 가능)
                 self.targets[target] = torch.from_numpy(
                     np.array([np.array(y).astype(np.float32) for y in df[target]])
                 ).to(device)
         else:
+            # 추론용 데이터셋에서는 target 없음
             self.targets = None
 
     def __len__(self):
@@ -315,13 +334,13 @@ class SequentialDataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        하나의 샘플(batch 단위 이전)을 반환
+        개별 샘플 반환 (DataLoader가 batch 단위로 모아줌)
         - feature_sequences: {feature_name: 시퀀스 텐서}
         - mask: 해당 시퀀스의 패딩 마스크
         - targets: target label (있으면 반환, 없으면 None)
         """
 
-        # 입력 feature 시퀀스 꺼내오기
+        # 입력 feature 시퀀스에서 idx번째 샘플 꺼내기
         feature_sequences = {
             feature_name: sequence[idx]
             for feature_name, sequence in self.feature_sequences.items()
@@ -341,12 +360,36 @@ class SequentialDataset(Dataset):
 
 
 class SequenceVectorDataset(Dataset):
-    def __init__(self, item_id: np.ndarray, seq_vector: np.ndarray, device: str):
-        self.item_id = torch.from_numpy(item_id).to(device)
+    def __init__(
+        self,
+        item_id: np.ndarray,
+        seq_vector: np.ndarray,
+        item_id_to_index: dict,
+        device: str,
+    ):
+        """
+        시퀀스 벡터와 매핑된 item index를 반환하는 Dataset
+        :param item_id: 원본 item_id 배열
+        :param seq_vector: 시퀀스 벡터 배열 (float32)
+        :param item_id_to_index: {원본 item_id: index} 매핑 딕셔너리
+        :param device: 텐서를 저장할 장치 (CPU/GPU)
+        """
+        # 원본 item_id를 정수형 index로 변환 (0, 1, 2, ..)
+        idx_array = np.array([item_id_to_index[i] for i in item_id], dtype=np.int64)
+
+        # torch Tensor로 변환
+        self.item_idx = torch.from_numpy(idx_array).to(device)
         self.seq_vector = torch.from_numpy(seq_vector).to(device)
 
     def __len__(self):
-        return len(self.item_id)
+        """
+        전체 데이터 개수 반환
+        """
+        return len(self.item_idx)
 
     def __getitem__(self, idx):
-        return self.item_id[idx], self.seq_vector[idx]
+        """
+        인덱스 idx에 해당하는 샘플 반환
+        - (target item index, sequence vector)
+        """
+        return self.item_idx[idx], self.seq_vector[idx]

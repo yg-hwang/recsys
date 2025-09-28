@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple, Union, Literal
 from .layers import PositionalEncoding
 
 
-class SimpleTransformerRec(nn.Module):
+class SimpleTransformer(nn.Module):
     """
     TransformerEncoder 기반 Sequential Recommendation (Baseline)
     - 여러 feature sequence를 임베딩하여 Transformer로 학습
@@ -32,7 +32,7 @@ class SimpleTransformerRec(nn.Module):
         :param global_pool: 임베딩 값 출력 Pooling 방식
         """
 
-        super(SimpleTransformerRec, self).__init__()
+        super(SimpleTransformer, self).__init__()
         # multi-task 학습을 위한 task 수 (output_dims에 정의된 label 수)
         self.n_tasks = len(output_dims)
 
@@ -40,8 +40,11 @@ class SimpleTransformerRec(nn.Module):
         self.seq_len = seq_len
         self.global_pool = global_pool
 
-        # 각 feature 마다 임베딩 레이어 생성 (예: item_id, category_id)
-        # nn.Embedding: 범주형 값을 dense vector로 변환
+        # -----------------------------
+        # 1. Feature Embedding Layer
+        # -----------------------------
+        # feature마다 별도의 nn.Embedding을 생성
+        # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
         self.embeddings = nn.ModuleDict(
             {
                 feature_name: nn.Embedding(n_classes, embedding_dim)
@@ -49,10 +52,13 @@ class SimpleTransformerRec(nn.Module):
             }
         )
 
-        # TransformerEncoder 기본 단위: self-attention + feedforward 블록
+        # -----------------------------
+        # 2. Transformer Encoder Layer
+        # -----------------------------
+        # Transformer 기본 단위: self-attention + feedforward 블록
         encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads)
 
-        # 위치 정보가 없는 Transformer에 시퀀스 내 순서를 입력
+        # 위치 정보를 넣기 위한 Positional Encoding
         self.position_encoding = PositionalEncoding(
             dim_model=embedding_dim, max_len=seq_len
         )
@@ -62,7 +68,11 @@ class SimpleTransformerRec(nn.Module):
             encoder_layer=encoder_layer, num_layers=n_layers
         )
 
-        # 각 예측 label(target 변수)마다 출력 차원을 맞추기 위한 Linear layer 정의
+        # -----------------------------
+        # 3. Task-specific Output Tower
+        # -----------------------------
+        # 각 타겟 변수별로 Linear layer 생성 (예: `y_color`의 vocab 크기만큼 출력 차원)
+        # 각 예측 target label마다 출력 차원을 맞추기 위한 Linear layer 정의
         self.towers = nn.ModuleDict(
             {
                 feature_name: nn.Linear(embedding_dim, n_classes)
@@ -72,8 +82,9 @@ class SimpleTransformerRec(nn.Module):
 
     def _apply_pooling(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Transformer 출력 시퀀스를 하나의 벡터로 요약하는 함수
-        (seq_len, batch_size, hidden_dim) -> (batch_size, hidden_dim)
+        Transformer 출력 시퀀스를 하나의 벡터로 요약
+        입력: (seq_len, batch_size, hidden_dim)
+        출력: (batch_size, hidden_dim)
         """
 
         match self.global_pool:
@@ -101,39 +112,54 @@ class SimpleTransformerRec(nn.Module):
         1) feature별 임베딩
         2) feature 임베딩 합산 (같은 길이 시퀀스로 통합)
         3) Positional Encoding 추가
-        4) TransformerEncoder 적용
+        4) TransformerEncoder 적용 (self-attention)
         5) pooling -> user representation
         6) task tower를 통해 각 task 예측
 
-        :param feature_sequences: list of input sequences
-        :param masks: list of padding masks for each input sequence
+        :param feature_sequences: {feature_name: 시퀀스 텐서}
+        :param masks: padding mask (batch_size, seq_len)
+        :return: (sequence vector, {target_name: 예측 로짓})
         """
 
-        # (batch_size, seq_len, embedding_dim) feature별 임베딩 합산
+        # -----------------------------
+        # 1. Feature Embedding
+        # -----------------------------
+        # feature별 임베딩 후 모두 합산
+        # (batch_size, seq_len, embedding_dim)
         x_embed = sum(
             self.embeddings[feature_name](x)
             for feature_name, x in feature_sequences.items()
         )
 
-        # Transformer 입력은 (seq_len, batch_size, embedding_dim) 형태여야 함
+        # -----------------------------
+        # 2. Transformer 입력 형식 맞추기
+        # -----------------------------
+        # Transformer는 (seq_len, batch_size, embedding_dim) 입력을 기대
         x_embed = x_embed.permute(1, 0, 2)
 
-        # 순서 정보를 넣기 위해 positional encoding 더해줌
+        # -----------------------------
+        # 3. Positional Encoding 추가
+        # -----------------------------
         x_embed = self.position_encoding(x_embed)
 
-        # Transformer encoder 통과 (self-attention 수행)
-        # src_key_padding_mask: (batch_size, seq_len) -> padding mask 적용 가능
+        # -----------------------------
+        # 4. Transformer Encoder 적용
+        # -----------------------------
+        # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
         x_embed = self.transformer(x_embed, src_key_padding_mask=masks)
 
-        # 각 task별 출력 계산
+        # -----------------------------
+        # 5. Task별 예측 출력
+        # -----------------------------
         y_outputs = {}
         for target_name, tower in self.towers.items():
             # (seq_len, batch_size, embedding_dim) -> Linear -> (seq_len, batch_size, n_classes)
-            # y_output: (seq_len, batch_size, n_classes)
             y_outputs[target_name] = tower(x_embed)
 
-        # 최종 feature vector 출력 (pooling 적용)
-        # (seq_len, batch_size, embedding_dim) -> (batch_size, embedding_dim)
+        # -----------------------------
+        # 6. Vector Representation (Pooling)
+        # -----------------------------
+        # 최종 feature vector (batch_size, embedding_dim)
         x_final = self._apply_pooling(x_embed)
 
         return x_final, y_outputs
