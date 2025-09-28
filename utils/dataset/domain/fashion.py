@@ -4,6 +4,16 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Fashion:
+    """
+    패션 도메인 아이템 메타데이터 구성을 위한 속성 정의 클래스
+    - 실제 학습 및 추천에 사용할 아이템 데이터를 시뮬레이션할 때 참조
+    - 속성별 가능한 값들을 리스트 형태로 정의 (색상, 스타일, 소재 등)
+    - 아이템 제목을 생성할 때 사용할 템플릿도 함께 포함
+    """
+
+    # -------------------------
+    # 아이템 속성 정의
+    # -------------------------
     color: List[str] = field(
         default_factory=lambda: [
             "화이트",
@@ -98,6 +108,10 @@ class Fashion:
             "카디건",
         ]
     )
+
+    # -------------------------
+    # 아이템 제목 생성 템플릿
+    # -------------------------
     name_templates: List[str] = field(
         default_factory=lambda: [
             "{season} {fit} {color} {material} {sleeve} {category}",

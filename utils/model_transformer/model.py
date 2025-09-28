@@ -275,7 +275,7 @@ class Model:
                     "user_id": data["user_id"],
                     "outputs": outputs,  # feature별 예측 값
                     "seq_vector": seq_vector.tolist(),  # Transformer 시퀀스 벡터
-                    "item_vector": item_vector.tolist(),  # Projection 상품 벡터
+                    "item_vector": item_vector.tolist(),  # Projection 아이템 벡터
                 }
             )
 

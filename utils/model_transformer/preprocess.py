@@ -100,7 +100,7 @@ class SequenceGenerator:
 
         :param max_seq_len: 시퀀스 최대 길이 (초과하면 잘라내고, 부족하면 패딩)
         :param user_id: 유저 식별 컬럼명
-        :param item_id: 상품 식별 컬럼명
+        :param item_id: 아이템 식별 컬럼명
         :param order_by: 시퀀스 정렬 기준 (보통 시간으로 함)
         :param partition_by: (선택) 완성된 DataFrame을 파티셔닝하여 저장할 때 사용
         """
@@ -175,7 +175,7 @@ class SequenceGenerator:
     ) -> Union[int, str, None]:
         """
         시퀀스에서 target label 추출
-        - 보통 마지막 아이템을 다음 예측의 타깃으로 사용
+        - 보통 마지막 아이템을 다음 예측의 target으로 사용
         """
 
         if x is None:

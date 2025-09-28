@@ -4,7 +4,7 @@ from torch.nn import functional as F
 
 class MultiOutputRegressor(nn.Module):
     """
-    시퀀스 벡터를 상품 벡터 공간으로 projection하는 MLP 기반 회귀 모델
+    시퀀스 벡터를 아이템 벡터 공간으로 projection하는 MLP 기반 회귀 모델
     """
 
     def __init__(
@@ -38,7 +38,7 @@ class MultiOutputRegressor(nn.Module):
 
     def forward(self, x):
         """
-        Forward: 시퀀스 벡터를 상품 벡터로 출력 변환
+        Forward: 시퀀스 벡터를 아이템 벡터로 출력 변환
         """
 
         # Linear -> BatchNorm -> ReLU -> Dropout
@@ -53,7 +53,7 @@ class MultiOutputRegressor(nn.Module):
         x = F.relu(self.bn3(self.linear3(x)))
         x = self.dropout(x)
 
-        # 출력층: Linear (64차원 상품 벡터로 매핑)
+        # 출력층: Linear (64차원 아이템 벡터로 매핑)
         x = self.output_layer(x)
 
         return x

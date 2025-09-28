@@ -45,8 +45,8 @@ svc = bentoml.Service("rec_service")
 @svc.api(input=JSON(), output=JSON())
 def predict_lightgcn(input_data: List[Dict[str, any]]) -> dict:
     """
-    LightGCN 모델 기반 추천 상품 제공 API
-    - 입력: JSON (사용자 ID)
+    LightGCN 모델 기반 추천 아이템 제공 API
+    - 입력: JSON (유저 ID)
     - 출력: JSON (추천 결과)
     """
     return {"predictions": model_lightgcn.predict(input_data)}
@@ -55,7 +55,7 @@ def predict_lightgcn(input_data: List[Dict[str, any]]) -> dict:
 @svc.api(input=JSON(), output=JSON())
 def predict_transformer(input_data: List[Dict[str, any]]) -> dict:
     """
-    Transformer 기반 시퀀스 추천 상품 제공 API
+    Transformer 기반 시퀀스 추천 아이템 제공 API
     - 입력: JSON (Feature Sequence)
     - 출력: JSON (예측된 feature 후보, seq_vector, item_vector)
     """
