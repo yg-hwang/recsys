@@ -137,7 +137,7 @@ class LightGCN(nn.Module):
         )
 
         # 사용자와 아이템을 한 행렬 안에서 구분하기 위해 아이템 노드에는 사용자 수만큼의 offset을 더해줍니다.
-        # 예: user=0, item=2 → 실제 위치는 (row=0, col=U+2)
+        # 예: user=0, item=2 -> 실제 위치는 (row=0, col=U+2)
         rows = np.concatenate([user_idx, item_idx + self.n_users])
         cols = np.concatenate([item_idx + self.n_users, user_idx])
 
