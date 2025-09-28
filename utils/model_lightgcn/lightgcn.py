@@ -15,7 +15,7 @@ class LightGCN(nn.Module):
         """
         LightGCN 모델 클래스 초기화
 
-        :param data: 사용자-아이템 상호작용 데이터 (user_id, item_id 포함)
+        :param data: 유저-아이템 상호작용 데이터 (user_id, item_id 포함)
         :param n_layers: 그래프 전파 레이어 수
         :param latent_dim: 임베딩 차원 수
         """
@@ -32,9 +32,9 @@ class LightGCN(nn.Module):
 
     def _create_idx_map(self, data: Union[pd.DataFrame, pl.DataFrame]) -> None:
         """
-        사용자와 아이템 ID를 인덱스로 매핑
+        유저와 아이템 ID를 인덱스로 매핑
 
-        :param data: 사용자-아이템 상호작용 데이터
+        :param data: 유저-아이템 상호작용 데이터
         :return: None (클래스 내부에 user_map, item_map, n_users, n_items 저장)
         """
 
@@ -51,9 +51,9 @@ class LightGCN(nn.Module):
 
     def _create_interaction(self, data: pd.DataFrame) -> None:
         """
-        사용자별 아이템 상호작용 리스트 생성
+        유저별 아이템 상호작용 리스트 생성
 
-        :param data: 사용자-아이템 상호작용 데이터 (user_idx, item_idx 포함)
+        :param data: 유저-아이템 상호작용 데이터 (user_idx, item_idx 포함)
         :return: None (클래스 내부에 interaction 딕셔너리 저장)
         """
 
@@ -61,7 +61,7 @@ class LightGCN(nn.Module):
 
     def _init_embedding(self) -> None:
         """
-        사용자/아이템 임베딩 초기화 (Xavier Uniform 분포)
+        유저, 아이템 임베딩 초기화 (Xavier Uniform 분포)
 
         :return: None (embed_init에 임베딩 저장)
         """
@@ -75,7 +75,7 @@ class LightGCN(nn.Module):
         """
         아이템 네거티브 샘플링 (주어진 아이템 리스트에 없는 임의의 아이템 선택)
 
-        :param item_id_list: 특정 사용자와 상호작용한 아이템 리스트
+        :param item_id_list: 특정 유저와 상호작용한 아이템 리스트
         :param n_items: 전체 아이템 개수
         :return: 부정 샘플링된 아이템 인덱스
         """
@@ -116,27 +116,27 @@ class LightGCN(nn.Module):
         """
         LightGCN 그래프 확산 행렬 (정규화된 adjacency matrix) 생성
 
-        :param data: 사용자-아이템 상호작용 데이터 (user_idx, item_idx 포함)
+        :param data: 유저-아이템 상호작용 데이터 (user_idx, item_idx 포함)
         :return: 정규화 adjacency matrix (PyTorch sparse tensor)
         """
 
-        # 사용자와 아이템 인덱스를 numpy 배열로 가져옵니다.
+        # 유저와 아이템 인덱스를 numpy 배열로 가져옵니다.
         user_idx = data["user_idx"].to_numpy()  # 예: [0, 0, 1, 2, 2, ...]
         item_idx = data["item_idx"].to_numpy()  # 예: [3, 7, 2, 1, 9, ...]
 
-        # 사용자-아이템 상호작용 행렬 R (U x I)
+        # 유저-아이템 상호작용 행렬 R (U x I)
         # 꼭 필요하지는 않지만, 보통 디버깅이나 확인용으로 만들어둡니다.
         R = dok_matrix((self.n_users, self.n_items), dtype=np.float32)
         R[user_idx, item_idx] = 1.0
 
         # 전체 그래프 인접행렬 크기: (U+I) x (U+I)
-        # 여기서 U는 사용자 수, I는 아이템 수입니다.
+        # 여기서 U는 유저 수, I는 아이템 수입니다.
         adj_mat = dok_matrix(
             (self.n_users + self.n_items, self.n_users + self.n_items),
             dtype=np.float32,
         )
 
-        # 사용자와 아이템을 한 행렬 안에서 구분하기 위해 아이템 노드에는 사용자 수만큼의 offset을 더해줍니다.
+        # 유저와 아이템을 한 행렬 안에서 구분하기 위해 아이템 노드에는 유저 수만큼의 offset을 더해줍니다.
         # 예: user=0, item=2 -> 실제 위치는 (row=0, col=U+2)
         rows = np.concatenate([user_idx, item_idx + self.n_users])
         cols = np.concatenate([item_idx + self.n_users, user_idx])
@@ -219,9 +219,9 @@ class LightGCN(nn.Module):
         torch.Tensor,
     ]:
         """
-        Forward propagation: 사용자, positive & negative 아이템 임베딩 반환
+        Forward propagation: 유저, positive & negative 아이템 임베딩 반환
 
-        :param users: 사용자 인덱스 리스트
+        :param users: 유저 인덱스 리스트
         :param pos_items: Positive 아이템 인덱스 리스트
         :param neg_items: Negative 아이템 인덱스 리스트
         :return: (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0)
@@ -248,9 +248,9 @@ class LightGCN(nn.Module):
 
     def predict(self, user_id_list: list) -> dict:
         """
-        주어진 사용자 ID 리스트에 대해 아이템 추천 수행 (이걸 사용하기 보다는 ANN을 빌드하여 사용 권장)
+        주어진 유저 ID 리스트에 대해 아이템 추천 수행 (이걸 사용하기 보다는 ANN을 빌드하여 사용 권장)
 
-        :param user_id_list: 추천을 받을 사용자 ID 리스트
+        :param user_id_list: 추천을 받을 유저 ID 리스트
         :return: {user_id: {"items": 추천 아이템 리스트, "scores": 해당 점수 리스트}}
         """
 

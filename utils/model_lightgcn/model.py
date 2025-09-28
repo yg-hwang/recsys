@@ -57,7 +57,7 @@ class Model:
 
     def predict(self, input_data: List[Dict[str, any]]) -> List[Dict[str, any]]:
         """
-        예측 상품 ID 및 점수 반환
+        예측 아이템 ID 및 점수 반환
 
         :param input_data: request body
         :return: results
