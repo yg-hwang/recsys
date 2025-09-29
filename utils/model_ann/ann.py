@@ -13,12 +13,12 @@ def build_index(
     num_threads: int | None = None,
 ) -> hnswlib.Index:
     """
-    주어진 벡터로 hnswlib 인덱스를 빌드합니다.
+    주어진 벡터로 hnswlib 인덱스 빌드
 
     :param vectors: (num, dim) 형태의 float32 배열
-    :param space: 유사도/거리 공간 ("ip", "cosine", "l2")
+    :param space: 유사도 및 거리 공간 ("ip", "cosine", "l2")
                   - "ip": 내적(점수 클수록 유사)
-                  - "cosine": 코사인 거리(작을수록 유사; 필요시 후처리로 1 - d로 유사도 변환)
+                  - "cosine": 코사인 거리(작을수록 유사) -> 필요시 후처리로 (1 - d)로 유사도 변환
                   - "l2": L2 거리(작을수록 유사)
     :param M: 그래프의 연결 정도
     :param ef_construction: 빌드 시 탐색 폭
@@ -27,7 +27,7 @@ def build_index(
     :return: hnswlib Index
     """
 
-    # 벡터 타입을 float32로 강제 (hnswlib 요구사항)
+    # 벡터 타입을 float32로 강제 (hnswlib 필수 사항)
     if vectors.dtype != np.float32:
         vectors = vectors.astype(np.float32)
 
@@ -59,7 +59,7 @@ def search(
     top_k: int = 5,
 ) -> Dict[int, float] | list[Dict[int, float]]:
     """
-    쿼리 벡터(단일 또는 배치)에 대해 인덱스에서 근접 이웃을 검색합니다.
+    쿼리 벡터(단일 또는 배치)에 대해 인덱스에서 근접 이웃 검색
     반환 형식:
       - 단일 벡터 입력: {내부인덱스: 점수}
       - 다중 벡터 입력: [{내부인덱스: 점수}, ...] (쿼리 순서 동일)
@@ -68,21 +68,27 @@ def search(
     :param index: hnswlib 인덱스
     :param top_k: 반환할 이웃 수
     """
+
+    # -----------------------------------------------
     # 입력 벡터 형태 정규화
+    # -----------------------------------------------
     is_single = query_vector.ndim == 1
     query = query_vector.reshape(1, -1) if is_single else query_vector
     if query.dtype != np.float32:
         query = query.astype(np.float32)
 
+    # -----------------------------------------------
     # ANN 검색 수행 (배치 지원)
+    # -----------------------------------------------
     labels, distances = index.knn_query(query, k=top_k)
-
     # hnswlib의 distance 해석
     # - "ip": 내적 점수 (클수록 유사)
     # - "cosine": 거리 (작을수록 유사) -> 유사도 = 1 - d
     # - "l2": L2 거리 (작을수록 유사) -> 유사도 = 1 / (1 + d)
 
+    # -----------------------------------------------
     # 최종 반환할 결과 리스트 (쿼리마다 dict 저장)
+    # -----------------------------------------------
     results: list[Dict[int, float]] = []
     for q in range(labels.shape[0]):
         # q번째 쿼리 벡터에 대한 검색 결과 저장용 dict
@@ -91,7 +97,7 @@ def search(
             # -1은 결과 없음(NULL)을 의미
             if lbl == -1:
                 continue
-                # hnswlib에서 -1이 나오는 경우
+                # hnswlib에서 -1이 나오는 경우 설명
                 # - knn_query()는 항상 요청한 k개의 결과를 반환하려고 시도합니다.
                 # - 하지만 실제로 인덱스에 들어있는 벡터 수가 부족하거나 특정 쿼리에 대해 유효한 이웃을 찾지 못했을 때,
                 # - 결과 자리 채우기 용도로 -1을 반환합니다.

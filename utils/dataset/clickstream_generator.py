@@ -77,30 +77,43 @@ class ClickstreamGenerator:
         """
         session_rows = []
         for _ in range(self.n_sessions):
+
+            # -----------------------------------------------
             # 세션 시작 시각 (start_date 기준 랜덤 offset)
+            # -----------------------------------------------
             base_time = self.start_date + timedelta(
                 days=random.randint(0, 30),
                 hours=random.randint(0, 23),
                 minutes=random.randint(0, 59),
             )
 
+            # -----------------------------------------------
             # anchor 아이템 랜덤 선택
+            # -----------------------------------------------
             anchor_row = self.df_item_metadata.sample(1).iloc[0]
 
+            # -----------------------------------------------
             # anchor 아이템과 유사한 아이템 추출
+            # -----------------------------------------------
             similar_items = self.get_similar_items(anchor_row)
             if not similar_items:
                 continue
 
+            # -----------------------------------------------
             # 유저가 실제로 본 아이템 리스트 (3~6개 랜덤 선택)
+            # -----------------------------------------------
             viewed_items = random.sample(
                 similar_items, min(len(similar_items), random.randint(3, 6))
             )
 
+            # -----------------------------------------------
             # 해당 user_id의 속성 조회 (없으면 빈 dict)
+            # -----------------------------------------------
             user_attrs = self.user_attr_dict.get(user_id, {})
 
+            # -----------------------------------------------
             # `viewed_items` 각각에 대해 로그 생성
+            # -----------------------------------------------
             for i, item_id in enumerate(viewed_items):
                 timestamp = base_time + timedelta(minutes=i * random.randint(1, 4))
                 action = random.choices(self.actions, weights=self.action_weights)[0]
@@ -142,9 +155,9 @@ def generate_clickstream(
 
     save_path.mkdir(parents=True, exist_ok=True)
 
-    # -------------------------
+    # -----------------------------------------------
     # 아이템 메타데이터 로드
-    # -------------------------
+    # -----------------------------------------------
     df_item_metadata = pd.read_parquet(item_metadata_path)
 
     # 벡터는 로그에 필요 없으므로 제거
@@ -154,18 +167,18 @@ def generate_clickstream(
         df_item_metadata = df_item_metadata.drop(columns=["image_vector"])
     assert "item_id" in df_item_metadata.columns, "`item_id` 컬럼이 존재해야 합니다."
 
-    # -------------------------
+    # -----------------------------------------------
     # 유저 메타데이터 로드
-    # -------------------------
+    # -----------------------------------------------
     df_users = pd.read_parquet(user_metadata_path)
     assert (
         "user_id" in df_users.columns
     ), "user_metadata에는 `user_id` 컬럼이 존재해야 합니다."
     user_ids = df_users["user_id"].tolist()
 
-    # -------------------------
+    # -----------------------------------------------
     # 유저를 chunk 단위로 로그 생성
-    # -------------------------
+    # -----------------------------------------------
     chunk = 0
     for start in range(0, len(user_ids), users_per_chunk):
         generator = ClickstreamGenerator(

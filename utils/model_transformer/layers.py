@@ -4,30 +4,69 @@ import torch.nn as nn
 
 class PositionalEncoding(nn.Module):
     def __init__(self, dim_model: int, max_len: int = 20):
+        """
+        위치 임베딩(Positional Encoding) 클래스
+        - Transformer는 RNN처럼 순차적 구조가 없으므로,
+          입력 토큰의 순서를 알 수 있도록 sin, cos 함수를 이용한 위치 정보를 추가하기 위한 기능
+
+        :param dim_model: 임베딩 차원 크기 (예: 64, 128)
+        :param max_len: 시퀀스 최대 길이 (예: 20)
+        """
         super(PositionalEncoding, self).__init__()
 
-        # pos = [0, 1, 2, ..., max_len-1]
+        # -----------------------------------------------
+        # 위치 벡터 (0, 1, 2, ..., max_len-1)
+        # -----------------------------------------------
+        # 각 row는 시퀀스 내 위치를 의미
         position = torch.arange(0, max_len).unsqueeze(1)  # (max_len, 1)
 
-        # div_term = 10000^(2i/dim_model)
+        # -----------------------------------------------
+        # 주기(term) 계산
+        # -----------------------------------------------
+        # Transformer 논문 공식:
+        # PE(pos, 2i)   = sin(pos / 10000^(2i/dim_model))
+        # PE(pos, 2i+1) = cos(pos / 10000^(2i/dim_model))
         div_term = torch.exp(
-            torch.arange(0, dim_model, 2)
+            torch.arange(0, dim_model, 2)  # 0, 2, 4, ..., (dim_model-2)
             * (-torch.log(torch.tensor(10000.0)) / dim_model)
         )  # (dim_model // 2)
 
-        # Compute sin(pos) and cos(pos) for even/odd indices
+        # -----------------------------------------------
+        # 위치 임베딩 행렬 초기화
+        # -----------------------------------------------
         pe = torch.zeros(max_len, dim_model)
-        pe[:, 0::2] = torch.sin(position * div_term)  # Even indices (2i)
-        pe[:, 1::2] = torch.cos(position * div_term)  # Odd indices (2i+1)
 
-        # Add a batch dimension for broadcasting
-        pe = pe.unsqueeze(1)  # (max_len, 1, dim_model)
-        self.register_buffer("pe", pe)  # Save as a buffer, not a parameter
+        # 짝수 index (2i): sin 함수 적용
+        pe[:, 0::2] = torch.sin(position * div_term)
+
+        # 홀수 index (2i+1): cos 함수 적용
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # -----------------------------------------------
+        # 배치 브로드캐스팅을 위해 차원 추가
+        # -----------------------------------------------
+        # (max_len, 1, dim_model)
+        # - seq_len: max_len
+        # - batch_size: 1 (추후 broadcast)
+        # - embedding_dim: dim_model
+        pe = pe.unsqueeze(1)
+
+        # -----------------------------------------------
+        # 학습 파라미터가 아닌 buffer로 등록
+        # -----------------------------------------------
+        # - 학습 중 업데이트 되지 않음
+        # - GPU/CPU 전환 시 자동 이동
+        self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        :param x: (seq_len, batch_size, embedding_dim)
+        순전파 (입력에 위치 임베딩 더하기)
+
+        :param x: 입력 텐서 (seq_len, batch_size, embedding_dim)
+        :return: 위치 인코딩이 더해진 텐서 (seq_len, batch_size, embedding_dim)
         """
+        # 현재 입력 길이(seq_len)에 해당하는 위치 임베딩 잘라서 더해줌
+        # Broadcasting: (seq_len, batch_size, dim) + (seq_len, 1, dim)
         # Position encoding은 입력 x에 더해줌 (broadcast)
         x = x + self.pe[: x.size(0), :]
 

@@ -10,7 +10,7 @@ from typing import Dict
 
 class FeatureLabelEncoder(LabelEncoder):
     """
-    범주형 컬럼을 정수형 컬럼으로 인코딩한다.
+    범주형 컬럼을 연속형 정수로 인코딩하기 위한 기능
 
     - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용
     - `fit()`: 컬럼별 고유값으로 인코더 학습
@@ -25,7 +25,7 @@ class FeatureLabelEncoder(LabelEncoder):
 
     def fit(self, df: pd.DataFrame):
         """
-        전달된 DataFrame의 모든 컬럼에 대해 LabelEncoder를 학습합니다.
+        전달된 DataFrame의 모든 컬럼에 대해 LabelEncoder를 생성
         """
 
         for column in sorted(df.columns):
@@ -47,10 +47,10 @@ class FeatureLabelEncoder(LabelEncoder):
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        학습된 인코더로 각 컬럼 값을 정수로 변환합니다.
-        - in-place 할당을 수행하므로, df가 뷰(view)일 경우 pandas의 SettingWithCopyWarning이 발생할 수 있습니다.
-          이 경우, 호출부에서 df = df.copy() 후 넘기는 것을 권장합니다.
-        - 학습 시점에 없던 클래스 값(Unseen)이 등장하면 LabelEncoder는 에러를 발생시킵니다.
+        학습된 인코더로 각 컬럼 값을 정수로 변환
+        - in-place 할당을 수행하므로, df가 뷰(view)일 경우 pandas의 SettingWithCopyWarning이 발생할 수 있음
+          이 경우, 호출부에서 df = df.copy() 후 넘기는 것을 권장
+        - 학습 시점에 없던 클래스 값(Unseen)이 등장하면 LabelEncoder는 에러를 발생시킴
         """
 
         for column in sorted(df.columns):
@@ -63,8 +63,8 @@ class FeatureLabelEncoder(LabelEncoder):
 
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        정수로 인코딩된 각 컬럼을 원래 라벨로 복원합니다.
-        - LabelEncoder.inverse_transform은 1D 배열을 기대하므로 컬럼별로 개별 호출합니다.
+        정수로 인코딩된 각 컬럼을 원래 라벨로 복원
+        - LabelEncoder.inverse_transform은 1D 배열을 기대하므로 컬럼별로 개별 호출
         """
 
         for column in sorted(df.columns):
@@ -300,7 +300,9 @@ class SequentialDataset(Dataset):
         # target label 텐서
         self.targets: Union[Dict[str, torch.Tensor], None] = {}
 
-        # ---------- feature 시퀀스 준비 ---------- #
+        # -----------------------------------------------
+        # feature 시퀀스 준비
+        # -----------------------------------------------
         for feature in feature_sequences:
             if feature == "mask":
                 # mask 컬럼: float32 (Transformer attention mask용)
@@ -312,7 +314,9 @@ class SequentialDataset(Dataset):
                 x = np.array([np.array(x).astype(np.int32) for x in df[feature]])
                 self.feature_sequences[feature] = torch.from_numpy(x).to(device)
 
-        # ---------- target label ---------- #
+        # -----------------------------------------------
+        # target label
+        # -----------------------------------------------
         if targets is not None:
             for target in targets:
                 # target은 float32로 변환 (CE Loss, BCE Loss 등에서 활용 가능)
