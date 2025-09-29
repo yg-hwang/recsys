@@ -197,5 +197,5 @@ def generate_clickstream(
             user_logs.extend(generator.simulate_user_sessions(u))
 
         df_chunk = pd.DataFrame(user_logs)
-        df_chunk.to_parquet(save_path.joinpath(f"chunk_{chunk:03d}"))
+        df_chunk.to_parquet(save_path.joinpath(f"chunk_{chunk:03d}.parquet"))
         chunk += 1
