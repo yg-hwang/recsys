@@ -15,7 +15,9 @@ class Model:
         self.model_dir = Path(model_dir).resolve()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # ---------- Model: Transformer ---------- #
+        # -----------------------------------------------
+        # Model: Transformer
+        # -----------------------------------------------
         model = "transformer"
 
         # 학습 시 저장해둔 Transformer 설정(config) 로드
@@ -44,7 +46,9 @@ class Model:
             for feature in self.seq_model_config["feature_dims"].keys()
         }
 
-        # ---------- Model: Regressor ---------- #
+        # -----------------------------------------------
+        # Model: Regressor
+        # -----------------------------------------------
         model = "regressor"
 
         # projection 모델 설정(config) 로드
@@ -211,7 +215,9 @@ class Model:
                 # 라벨 복원
                 y_pred_labels = self.encoder[target].inverse_transform(y_pred_ids)
 
-                # ---------- 클래스별 확률 평균 ---------- #
+                # -----------------------------------------------
+                # 클래스별 확률 평균
+                # -----------------------------------------------
                 label_probs: Dict[str, List[float]] = {}
                 for label, prob in zip(y_pred_labels, y_pred_probs):
                     if label not in label_probs:

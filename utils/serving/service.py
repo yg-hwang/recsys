@@ -6,17 +6,17 @@ from typing import List, Dict
 import bentoml
 from bentoml.io import JSON
 
-# -----------------------------
+# -----------------------------------------------
 # 1) 프로젝트 경로 설정
-# -----------------------------
+# -----------------------------------------------
 # - 프로젝트 root 경로를 계산하여 sys.path에 추가 (로컬 모듈 import 오류 방지 목적)
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# -----------------------------
+# -----------------------------------------------
 # 2) 모델 불러오기
-# -----------------------------
+# -----------------------------------------------
 # - Transformer: 시퀀스 기반 추천 모델 (Sequential Transformer + Projection)
 # - LightGCN: 협업 필터링 기반 추천 모델
 from utils.model_transformer.model import Model as Transformer
@@ -32,16 +32,16 @@ model_dir = Path(base_dir).joinpath(f"data/model/{DOMAIN}")
 model_transformer = Transformer(model_dir=model_dir)
 model_lightgcn = LightGCN(model_dir=model_dir)
 
-# -----------------------------
+# -----------------------------------------------
 # 3) BentoML 서비스 정의
-# -----------------------------
+# -----------------------------------------------
 # - 서비스 이름은 "rec_service"
 svc = bentoml.Service("rec_service")
 
 
-# -----------------------------
+# -----------------------------------------------
 # 4) API 엔드포인트 정의
-# -----------------------------
+# -----------------------------------------------
 @svc.api(input=JSON(), output=JSON())
 def predict_lightgcn(input_data: List[Dict[str, any]]) -> dict:
     """
@@ -62,9 +62,9 @@ def predict_transformer(input_data: List[Dict[str, any]]) -> dict:
     return {"predictions": model_transformer.predict(input_data)}
 
 
-# -----------------------------
+# -----------------------------------------------
 # 5) 모델 Reload API
-# -----------------------------
+# -----------------------------------------------
 # - 새로운 checkpoint가 저장되었을 때 호출하면 메모리에 올려둔 모델을 다시 로드하여 반영
 @svc.api(input=JSON(), output=JSON())
 def reload_model_lightgcn(_: dict) -> dict:

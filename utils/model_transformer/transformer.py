@@ -40,9 +40,9 @@ class SimpleTransformer(nn.Module):
         self.seq_len = seq_len
         self.global_pool = global_pool
 
-        # -----------------------------
-        # 1. Feature Embedding Layer
-        # -----------------------------
+        # -----------------------------------------------
+        # Feature Embedding Layer
+        # -----------------------------------------------
         # feature마다 별도의 nn.Embedding을 생성
         # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
         self.embeddings = nn.ModuleDict(
@@ -52,9 +52,9 @@ class SimpleTransformer(nn.Module):
             }
         )
 
-        # -----------------------------
-        # 2. Transformer Encoder Layer
-        # -----------------------------
+        # -----------------------------------------------
+        # Transformer Encoder Layer
+        # -----------------------------------------------
         # Transformer 기본 단위: self-attention + feedforward 블록
         encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads)
 
@@ -68,9 +68,9 @@ class SimpleTransformer(nn.Module):
             encoder_layer=encoder_layer, num_layers=n_layers
         )
 
-        # -----------------------------
-        # 3. Task-specific Output Tower
-        # -----------------------------
+        # -----------------------------------------------
+        # Task-specific Output Tower
+        # -----------------------------------------------
         # 각 타겟 변수별로 Linear layer 생성 (예: `y_color`의 vocab 크기만큼 출력 차원)
         # 각 예측 target label마다 출력 차원을 맞추기 위한 Linear layer 정의
         self.towers = nn.ModuleDict(
@@ -121,9 +121,9 @@ class SimpleTransformer(nn.Module):
         :return: (sequence vector, {target_name: 예측 로짓})
         """
 
-        # -----------------------------
+        # -----------------------------------------------
         # 1. Feature Embedding
-        # -----------------------------
+        # -----------------------------------------------
         # feature별 임베딩 후 모두 합산
         # (batch_size, seq_len, embedding_dim)
         x_embed = sum(
@@ -131,34 +131,34 @@ class SimpleTransformer(nn.Module):
             for feature_name, x in feature_sequences.items()
         )
 
-        # -----------------------------
+        # -----------------------------------------------
         # 2. Transformer 입력 형식 맞추기
-        # -----------------------------
+        # -----------------------------------------------
         # Transformer는 (seq_len, batch_size, embedding_dim) 입력을 기대
         x_embed = x_embed.permute(1, 0, 2)
 
-        # -----------------------------
+        # -----------------------------------------------
         # 3. Positional Encoding 추가
-        # -----------------------------
+        # -----------------------------------------------
         x_embed = self.position_encoding(x_embed)
 
-        # -----------------------------
+        # -----------------------------------------------
         # 4. Transformer Encoder 적용
-        # -----------------------------
+        # -----------------------------------------------
         # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
         x_embed = self.transformer(x_embed, src_key_padding_mask=masks)
 
-        # -----------------------------
+        # -----------------------------------------------
         # 5. Task별 예측 출력
-        # -----------------------------
+        # -----------------------------------------------
         y_outputs = {}
         for target_name, tower in self.towers.items():
             # (seq_len, batch_size, embedding_dim) -> Linear -> (seq_len, batch_size, n_classes)
             y_outputs[target_name] = tower(x_embed)
 
-        # -----------------------------
+        # -----------------------------------------------
         # 6. Vector Representation (Pooling)
-        # -----------------------------
+        # -----------------------------------------------
         # 최종 feature vector (batch_size, embedding_dim)
         x_final = self._apply_pooling(x_embed)
 
