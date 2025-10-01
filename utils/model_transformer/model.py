@@ -106,7 +106,9 @@ class Model:
         feature_sequences = {}
         masks = []
 
+        # -----------------------------------------------
         # feature 값 -> 정수 인코딩
+        # -----------------------------------------------
         for feature in inputs:
             for key, value in feature.items():
                 if key not in feature_sequences:
@@ -115,13 +117,15 @@ class Model:
                     # 학습 시 사용된 LabelEncoder로 인코딩
                     value = self.encoder[key].transform([value]).item()
                 except Exception as e:
-                    # 학습 시 등장하지 않은 값(unseen)은 "NONE"으로 대체
+                    # 학습 시 등장하지 않은 값(unseen)은 "<UNK>"로 대체
                     print(f"`{e} ({key})")
-                    value = self.encoder[key].transform(["NONE"]).item()
+                    value = self.encoder[key].transform(["<UNK>"]).item()
                 feature_sequences[key].append(value)
             masks.append(0)  # 실제 토큰 값(mask=0)
 
+        # -----------------------------------------------
         # padding, truncation 적용
+        # -----------------------------------------------
         for key in feature_sequences.keys():
             seq = feature_sequences[key]
             # 부족하면 padding 추가
@@ -138,7 +142,9 @@ class Model:
                 .to(self.device)
             )
 
+        # -----------------------------------------------
         # mask도 동일하게 padding, truncation 적용
+        # -----------------------------------------------
         if len(masks) < self.seq_model.seq_len:
             masks.extend([1] * (self.seq_model.seq_len - len(masks)))
         else:
@@ -180,10 +186,14 @@ class Model:
         results = list()
 
         for d in input_data:
+            # -----------------------------------------------
             # 모델 입력 형태로 전처리
+            # -----------------------------------------------
             data = self.preprocess(body=d)
 
-            # Transformer 예측
+            # -----------------------------------------------
+            # Transformer 기반 예측
+            # -----------------------------------------------
             outputs = {
                 target: {} for target in self.seq_model_config["output_dims"].keys()
             }
@@ -215,9 +225,7 @@ class Model:
                 # 라벨 복원
                 y_pred_labels = self.encoder[target].inverse_transform(y_pred_ids)
 
-                # -----------------------------------------------
                 # 클래스별 확률 평균
-                # -----------------------------------------------
                 label_probs: Dict[str, List[float]] = {}
                 for label, prob in zip(y_pred_labels, y_pred_probs):
                     if label not in label_probs:
@@ -259,11 +267,15 @@ class Model:
                 #     },
                 # }
 
+            # -----------------------------------------------
             # 시퀀스 벡터 L2 정규화
+            # -----------------------------------------------
             seq_vector = seq_vector.squeeze(0).detach().cpu().numpy()
             seq_vector = seq_vector / np.linalg.norm(seq_vector)
 
+            # -----------------------------------------------
             # projection 모델로 item vector 예측
+            # -----------------------------------------------
             with torch.no_grad():
                 self.reg_model.eval()
                 item_vector = (
@@ -275,7 +287,9 @@ class Model:
                     .numpy()
                 )
 
+            # -----------------------------------------------
             # 최종 결과 저장
+            # -----------------------------------------------
             results.append(
                 {
                     "user_id": data["user_id"],

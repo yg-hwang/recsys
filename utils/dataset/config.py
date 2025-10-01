@@ -7,7 +7,7 @@ class DatasetPath:
     """
     데이터셋 저장 경로를 관리하는 Config 클래스
     - dataset_name(예: "fashion")별로 하위 폴더를 자동 생성
-    - item & user metadata, interactions, text & image vectors 등 데이터셋 구성 요소별 경로를 프로퍼티로 제공
+    - item & user metadata, user logs, text & image vectors 등 데이터셋 구성 요소별 경로를 프로퍼티로 제공
     """
 
     # 기본 데이터셋 루트 경로 (기본값: `/tmp/recsys/dataset/`)
@@ -29,7 +29,6 @@ class DatasetPath:
     # -----------------------------------------------
     # 경로 접근자 (property)
     # -----------------------------------------------
-
     @property
     def base_path(self) -> Path:
         """
@@ -52,11 +51,11 @@ class DatasetPath:
         return self.base_path / "user_metadata.parquet"
 
     @property
-    def interactions_path(self) -> Path:
+    def user_logs_path(self) -> Path:
         """
         유저-아이템 상호작용(클릭 로그 등) 저장 경로 (디렉토리)
         """
-        return self.base_path / "interactions"
+        return self.base_path / "user_logs"
 
     @property
     def image_vectors_path(self) -> Path:
@@ -71,6 +70,20 @@ class DatasetPath:
         아이템 텍스트 벡터 저장 경로 (parquet)
         """
         return self.base_path / "text_vectors.parquet"
+
+    @property
+    def text_ann_index_path(self) -> Path:
+        """
+        아이템 텍스트 벡터로 빌드한 ANN 인덱스 저장 경로
+        """
+        return self.base_path / "text_ann.index"
+
+    @property
+    def image_ann_index_path(self) -> Path:
+        """
+        아이템 이미지 벡터로 빌드한 ANN 인덱스 저장 경로
+        """
+        return self.base_path / "image_ann.index"
 
     # -----------------------------------------------
     # 유틸 함수
