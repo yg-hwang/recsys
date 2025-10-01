@@ -23,10 +23,9 @@ from utils.model_transformer.model import Model as Transformer
 from utils.model_lightgcn.model import Model as LightGCN
 
 # 도메인 및 모델 저장 디렉토리 경로
-DOMAIN = "fashion"
 current_dir = os.path.abspath(os.curdir)
 base_dir = "/".join(current_dir.split("/")[:-2])
-model_dir = Path(base_dir).joinpath(f"data/model/{DOMAIN}")
+model_dir = Path(base_dir).joinpath(f"data/model/fashion")
 
 # 실제 모델 객체 메모리에 로드
 model_transformer = Transformer(model_dir=model_dir)

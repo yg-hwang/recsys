@@ -122,7 +122,7 @@ class SimpleTransformer(nn.Module):
         """
 
         # -----------------------------------------------
-        # 1. Feature Embedding
+        # Feature Embedding
         # -----------------------------------------------
         # feature별 임베딩 후 모두 합산
         # (batch_size, seq_len, embedding_dim)
@@ -132,24 +132,24 @@ class SimpleTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # 2. Transformer 입력 형식 맞추기
+        # Transformer 입력 형식 맞추기
         # -----------------------------------------------
         # Transformer는 (seq_len, batch_size, embedding_dim) 입력을 기대
         x_embed = x_embed.permute(1, 0, 2)
 
         # -----------------------------------------------
-        # 3. Positional Encoding 추가
+        # Positional Encoding 추가
         # -----------------------------------------------
         x_embed = self.position_encoding(x_embed)
 
         # -----------------------------------------------
-        # 4. Transformer Encoder 적용
+        # Transformer Encoder 적용
         # -----------------------------------------------
         # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
         x_embed = self.transformer(x_embed, src_key_padding_mask=masks)
 
         # -----------------------------------------------
-        # 5. Task별 예측 출력
+        # Task별 예측 출력
         # -----------------------------------------------
         y_outputs = {}
         for target_name, tower in self.towers.items():
@@ -157,7 +157,7 @@ class SimpleTransformer(nn.Module):
             y_outputs[target_name] = tower(x_embed)
 
         # -----------------------------------------------
-        # 6. Vector Representation (Pooling)
+        # Vector Representation (Pooling)
         # -----------------------------------------------
         # 최종 feature vector (batch_size, embedding_dim)
         x_final = self._apply_pooling(x_embed)
