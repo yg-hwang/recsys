@@ -18,6 +18,7 @@ def show_items(
         "sub_category",
         "article_type",
     ),
+    scores: List[float] = None,
     cols: int = 5,
 ) -> None:
     """
@@ -27,6 +28,7 @@ def show_items(
     :param df_item: 상품 메타데이터 DataFrame
     :param image_dir: 이미지가 저장된 폴더 경로
     :param attributes: 함께 출력할 속성 컬럼명
+    :param scores: 상품 점수 (ANN 기반 유사도 등)
     :param cols: Grid 열 (기본 5)
     """
     n_items = len(item_ids)
@@ -49,6 +51,8 @@ def show_items(
         attr_text = "\n".join(
             [f"{attr}: {item[attr]}" for attr in attributes if attr in item]
         )
+        if scores is not None:
+            attr_text += f"\nScore: {scores[idx]:.3f}"
 
         # 이미지 경로
         img_path = os.path.join(image_dir, f"{pid}.jpg")

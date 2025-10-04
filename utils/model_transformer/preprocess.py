@@ -285,9 +285,7 @@ class SequenceGenerator:
 
         # (6) 최종 컬럼 정리
         columns = (
-            [self.user_id, self.item_id, "user_rn", "seq_len", "mask"]
-            + self.features
-            + self.targets
+            [self.user_id, "user_rn", "seq_len", "mask"] + self.features + self.targets
         )
         if self.partition_by is not None:
             columns.append(self.partition_by)
