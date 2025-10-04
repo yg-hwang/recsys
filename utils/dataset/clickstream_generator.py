@@ -1,7 +1,7 @@
 import random
 import pandas as pd
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from datetime import datetime, timedelta
 
 
@@ -133,8 +133,8 @@ class ClickstreamGenerator:
 
 
 def generate_clickstream(
-    item_metadata_path: str,
-    user_metadata_path: str,
+    item_metadata_path: Union[str, Path],
+    user_metadata_path: Union[str, Path],
     save_path: Path,
     users_per_chunk: int,
     n_sessions_per_user: int,
