@@ -35,7 +35,7 @@ class Model:
         )
         self.seq_model = self.seq_model.to(self.device)
 
-        # 패딩 토큰 값 (보통 0)
+        # 패딩 토큰 값 ('-1'을 인코딩 했기 때문에 보통 0임)
         self.padding_value = padding_value
 
         # feature별 LabelEncoder 로드
@@ -76,62 +76,51 @@ class Model:
         ---------- 예시 입력 ----------
         {
             "user_id": 123,
-            "inputs": [
-                {
-                    "color": "화이트",
-                    "style": "캐주얼",
-                    "fit": "레귤러핏",
-                    "material": "코튼",
-                    "season": "가을",
-                    "sleeve": "롱",
-                    "category": "블라우스",
-                },
-                {
-                    "color": "그레이",
-                    "style": "포멀",
-                    "fit": "오버핏",
-                    "material": "퍼",
-                    "season": "가을",
-                    "sleeve": "롱",
-                    "category": "점퍼",
-                },
-            ],
+            "inputs": {
+                "brand_name":      ["Myntra", "FILA", "Quiksilver", "Proline"],
+                "gender":          ["Men", "Men", "Men", "Men"],
+                "age_group":       ["Adults-Men", "Adults-Men", "Adults-Men", "Adults-Men"],
+                "base_color":      ["Red", "Navy Blue", "Black", "Red"],
+                "season":          ["Summer", "Summer", "Summer", "Summer"],
+                "year":            ["2012", "2012", "2012", "2012"],
+                "usage":           ["Casual", "Casual", "Casual", "Casual"],
+                "master_category": ["Apparel", "Apparel", "Apparel", "Apparel"],
+                "sub_category":    ["Topwear", "Topwear", "Topwear", "Topwear"],
+                "article_type":    ["Tshirts", "Tshirts", "Tshirts", "Tshirts"],
+                "fit":             ["Regular Fit", "Regular Fit", "Regular Fit", "Regular Fit"],
+                "occasion":        ["<UNK>", "Casual", "Casual", "Casual"]
+            }
         }
 
         :param body: request body
         :return: body
         """
 
-        inputs = body.get("inputs", [])
-        feature_sequences = {}
-        masks = []
+        inputs = body.get("inputs", {})
 
-        # -----------------------------------------------
-        # feature 값 -> 정수 인코딩
-        # -----------------------------------------------
-        for feature in inputs:
-            for key, value in feature.items():
-                if key not in feature_sequences:
-                    feature_sequences[key] = []
+        feature_sequences = {}
+        for i, (key, values) in enumerate(inputs.items()):
+            # -----------------------------------------------
+            # feature 정수 인코딩
+            # -----------------------------------------------
+            seq = []
+            for v in values:
                 try:
                     # 학습 시 사용된 LabelEncoder로 인코딩
-                    value = self.encoder[key].transform([value]).item()
+                    v_encoded = self.encoder[key].transform([v]).item()
                 except Exception as e:
                     # 학습 시 등장하지 않은 값(unseen)은 "<UNK>"로 대체
                     print(f"`{e} ({key})")
-                    value = self.encoder[key].transform(["<UNK>"]).item()
-                feature_sequences[key].append(value)
-            masks.append(0)  # 실제 토큰 값(mask=0)
+                    v_encoded = self.encoder[key].transform(["<UNK>"]).item()
+                seq.append(v_encoded)
 
-        # -----------------------------------------------
-        # padding, truncation 적용
-        # -----------------------------------------------
-        for key in feature_sequences.keys():
-            seq = feature_sequences[key]
-            # 부족하면 padding 추가
+            # -----------------------------------------------
+            # padding, truncation 적용
+            # -----------------------------------------------
+            # 부족하면 padding
             if len(seq) < self.seq_model.seq_len:
                 seq.extend([self.padding_value] * (self.seq_model.seq_len - len(seq)))
-            # 초과하면 잘라냄
+            # 초과하면 truncating
             else:
                 seq = seq[: self.seq_model.seq_len]
 
@@ -142,6 +131,8 @@ class Model:
                 .to(self.device)
             )
 
+        input_seq_len = max([len(v) for k, v in inputs.items()])
+        masks = [0] * input_seq_len
         # -----------------------------------------------
         # mask도 동일하게 padding, truncation 적용
         # -----------------------------------------------
@@ -171,13 +162,10 @@ class Model:
 
         ---------- 출력 예시 ----------
         {
-            "color": ["그레이", "화이트"],
-            "style": ["레트로", "빈티지", "캐주얼", "포멀"],
-            "fit": ["레귤러핏", "루즈핏", "오버핏"],
-            "material": ["코튼", "퍼"],
-            "season": ["가을", "여름"],
-            "sleeve": ["롱", "롱슬리브"],
-            "category": ["블라우스", "셔츠", "점퍼"],
+            "user_id": 123,
+            "outputs": {...생략...},
+            "item_vector": [0.032706137746572495, ..., -0.017184698954224586],
+            "seq_vector": [-0.0020149946212768555, ..., 0.08416099101305008],
         }
 
         :param input_data: request body
@@ -234,38 +222,36 @@ class Model:
 
                 # 평균값으로 단순화
                 outputs[target] = {
-                    label: float(np.mean(probs)) for label, probs in label_probs.items()
+                    str(label): float(np.mean(probs))
+                    for label, probs in label_probs.items()
                 }
                 # ---------- 예시 ---------- #
                 # {
-                #     "category": {
-                #         "베스트": 0.9591713547706604,
-                #         "블라우스": 0.9999942779541016,
-                #         "점퍼": 0.9999899864196777
+                #     "age_group": {
+                #         "Adults-Men": 0.9999998211860657,
+                #         "Adults-Women": 0.9999995827674866,
                 #     },
-                #     "color": {
-                #         "그레이": 0.9999945163726807,
-                #         "네이비": 0.9791531562805176,
-                #         "화이트": 0.9999948740005493
+                #     "article_type": {"Earrings": 0.9999967813491821, "Tshirts": 0.9999957084655762},
+                #     "base_color": {
+                #         "Green": 0.9999945163726807,
+                #         "Navy Blue": 1.0,
+                #         "Olive": 0.9999948740005493,
+                #         "Red": 0.9999958276748657,
+                #         "White": 1.0,
                 #     },
-                #     "fit": {
-                #         "레귤러핏": 0.9999972581863403,
-                #         "루즈핏": 0.7540665864944458,
-                #         "오버핏": 0.9999918937683105
+                #     "brand_name": {
+                #         "ADIDAS": 1.0,
+                #         "Adrika": 0.9999954700469971,
+                #         "Classic Polo": 0.9999713897705078,
+                #         "Lee": 0.9999972581863403,
+                #         "Royal Diadem": 0.9999864101409912,
                 #     },
-                #     "material": {
-                #         "레이온": 0.9347188472747803,
-                #         "코튼": 0.9999949932098389,
-                #         "퍼": 0.9999948740005493
+                #     "fit": {"<UNK>": 0.9999969601631165, "Regular Fit": 0.9999995231628418},
+                #     "gender": {"Men": 0.9999998211860657, "Women": 0.9999999403953552},
+                #     "master_category": {
+                #         "Accessories": 0.9999992251396179,
+                #         "Apparel": 0.9999993443489075,
                 #     },
-                #     "season": {"가을": 0.9999992251396179, "간절기": 0.6271464228630066},
-                #     "sleeve": {"7부": 0.8122173547744751, "롱": 0.9999983310699463}
-                #     "style": {
-                #         "빈티지": 0.5657854080200195,
-                #         "캐주얼": 0.9999991655349731,
-                #         "포멀": 0.9999949932098389
-                #     },
-                # }
 
             # -----------------------------------------------
             # 시퀀스 벡터 L2 정규화

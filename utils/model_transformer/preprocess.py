@@ -12,7 +12,7 @@ class FeatureLabelEncoder(LabelEncoder):
     """
     범주형 컬럼을 연속형 정수로 인코딩하기 위한 기능
 
-    - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용
+    - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용 (특수 토큰 '-1', '<UNK>'를 강제로 포함)
     - `fit()`: 컬럼별 고유값으로 인코더 학습
     - `transform()`: 학습된 인코더로 각 컬럼을 정수로 치환 (in-place 할당)
     - `inverse_transform()`: 정수 -> 원래 라벨로 복원
@@ -22,18 +22,21 @@ class FeatureLabelEncoder(LabelEncoder):
         super().__init__()
         self._all_classes = {}  # 컬럼별 고유 클래스(Label) 저장
         self._all_encoders = {}  # 컬럼별 LabelEncoder 객체 저장
+        self.special_tokens = ["-1", "<UNK>"]
 
     def fit(self, df: pd.DataFrame):
         """
         전달된 DataFrame의 모든 컬럼에 대해 LabelEncoder를 생성
+        - '-1', '<UNK>' 토큰을 반드시 포함
         """
 
         for column in sorted(df.columns):
             # 개별 feature LabelEncoder 생성
             le = LabelEncoder()
 
-            # 해당 고유값 추출
-            values = df.loc[:, column].unique()
+            # 고유값 추출 후, 특수 토큰을 강제로 포함
+            values = df.loc[:, column].astype(str).unique().tolist()
+            values = list(set(values) | set(self.special_tokens))
 
             # 고유값 집합으로 인코더 학습
             le.fit(values)
@@ -48,13 +51,10 @@ class FeatureLabelEncoder(LabelEncoder):
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         학습된 인코더로 각 컬럼 값을 정수로 변환
-        - in-place 할당을 수행하므로, df가 뷰(view)일 경우 pandas의 SettingWithCopyWarning이 발생할 수 있음
-          이 경우, 호출부에서 df = df.copy() 후 넘기는 것을 권장
-        - 학습 시점에 없던 클래스 값(Unseen)이 등장하면 LabelEncoder는 에러를 발생시킴
         """
 
         for column in sorted(df.columns):
-            values = df.loc[:, column].to_numpy()
+            values = df.loc[:, column].astype(str).to_numpy()
             encoded_values = self._all_encoders[column].transform(values)
             df.loc[:, column] = encoded_values  # 정수 인코딩된 값으로 덮어쓰기
         logging.debug(">>> Encoding completed.")
@@ -211,24 +211,32 @@ class SequenceGenerator:
 
         self.features = []
         self.targets = []
+        total_skipped = 0  # skip된 시퀀스 수 카운트
 
-        # (3) feature별 시퀀스 생성
+        # (3) 유저별 시퀀스 생성 함수 (마지막 짧은 건 skip)
+        def make_sequences(x: pd.Series) -> list:
+            nonlocal total_skipped
+            seqs = []
+            n = len(x)
+            for i in range(n):
+                seq = list(x.iloc[max(0, i - self.max_seq_len + 1) : i + 1])
+                if i == n - 1 and len(seq) < self.max_seq_len:
+                    # 마지막인데 길이가 부족하면 skip
+                    total_skipped += 1
+                    continue
+                seqs.append(seq)
+            return seqs
+
         for idx, col_name in enumerate(feature_sequences):
             self.features.append(col_name)
 
-            # 유저별 누적 시퀀스 생성
+            # 입력 시퀀스 생성
             df_seq = (
                 data.groupby(self.user_id)[col_name]
-                .apply(
-                    lambda x: [
-                        list(x.iloc[max(0, i - self.max_seq_len + 1) : i + 1])
-                        for i in range(len(x))
-                    ]
-                )
+                .apply(make_sequences)
                 .explode()
                 .reset_index(level=0, drop=True)
-            )
-            df_seq = df_seq.apply(list)
+            ).apply(list)
 
             if idx == 0:
                 # 첫 feature 처리 시 seq_len, mask 추가
@@ -236,26 +244,46 @@ class SequenceGenerator:
                 mask = df_seq.apply(self._create_mask)
                 df_seq = df_seq.apply(self._add_padding)
 
-                data_output.loc[:, "seq_len"] = seq_len
-                data_output.loc[:, "mask"] = mask
-                data_output.loc[:, col_name] = df_seq
-
-            else:
-                # 이후 feature는 패딩만 적용
-                df_seq = df_seq.apply(self._add_padding)
+                data_output = data_output.loc[df_seq.index].copy()
+                data_output["seq_len"] = seq_len
+                data_output["mask"] = mask
                 data_output[col_name] = df_seq
+            else:
+                df_seq = df_seq.loc[data_output.index]
+                data_output[col_name] = df_seq.apply(self._add_padding)
 
-            # (4) target 생성 (다음 시점 label)
+            # (4) target 시퀀스 생성
             if output_targets is not None and col_name in output_targets:
-                target = f"y_{col_name}"
-                self.targets.append(target)
-                data_output.loc[:, target] = (
-                    data.groupby(self.user_id)[col_name]
-                    .shift(-1)  # 다음 아이템을 target으로 설정
-                    .reset_index(level=0, drop=True)
-                )
+                shifted_col = f"__shift__{col_name}"
+                data[shifted_col] = data.groupby(self.user_id)[col_name].shift(-1)
 
-        # (5) 최종 DataFrame 컬럼 정리
+                df_tgt = (
+                    data.groupby(self.user_id)[shifted_col]
+                    .apply(make_sequences)
+                    .explode()
+                    .reset_index(level=0, drop=True)
+                ).apply(list)
+
+                df_tgt = df_tgt.apply(
+                    lambda s: [v if pd.notnull(v) else 0 for v in s]
+                ).apply(self._add_padding)
+
+                # 입력과 동일한 index만 유지 (skip 동기화)
+                df_tgt = df_tgt.loc[data_output.index]
+
+                t_name = f"t_{col_name}"
+                self.targets.append(t_name)
+                data_output[t_name] = df_tgt
+
+                data.drop(columns=[shifted_col], inplace=True)
+
+        # (5) 다음 시점의 `item_id`를 `y_item_id`라는 새로운 타겟 컬럼으로 생성
+        data_output[f"y_{self.item_id}"] = data_output.groupby(self.user_id)[
+            self.item_id
+        ].shift(-1)
+        self.targets.append(f"y_{self.item_id}")
+
+        # (6) 최종 컬럼 정리
         columns = (
             [self.user_id, self.item_id, "user_rn", "seq_len", "mask"]
             + self.features
@@ -264,12 +292,23 @@ class SequenceGenerator:
         if self.partition_by is not None:
             columns.append(self.partition_by)
 
-        # 정렬 & index 리셋
         data_output = (
             data_output[columns]
             .sort_values([self.user_id, "user_rn"])
             .reset_index(drop=True)
         )
+
+        # (7) Null 값이 포함된 행 제거
+        # - `shift(-1)` 연산 때문에 마지막 이벤트는 target이 없음(NULL 발생)
+        # - 따라서 학습 가능한 행만 추출
+        data_output = data_output[data_output.notna().all(axis=1)].reset_index(
+            drop=True
+        )
+
+        logging.info(
+            f"[SequenceGenerator] Skipped {total_skipped} short sequences (< {self.max_seq_len})"
+        )
+
         return data_output
 
 

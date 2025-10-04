@@ -12,7 +12,12 @@ def show_items(
     item_ids: List[int],
     df_item: pd.DataFrame,
     image_dir: Union[Path, str],
-    attributes: Tuple = ("master_category", "sub_category", "article_type"),
+    attributes: Tuple = (
+        "brand_name",
+        "master_category",
+        "sub_category",
+        "article_type",
+    ),
     cols: int = 5,
 ) -> None:
     """

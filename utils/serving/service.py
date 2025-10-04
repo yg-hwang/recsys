@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 from utils.model_transformer.model import Model as Transformer
 from utils.model_lightgcn.model import Model as LightGCN
 
-# 도메인 및 모델 저장 디렉토리 경로
+# 모델 저장 디렉토리 경로
 current_dir = os.path.abspath(os.curdir)
 base_dir = "/".join(current_dir.split("/")[:-2])
 model_dir = Path(base_dir).joinpath(f"data/model/fashion")
