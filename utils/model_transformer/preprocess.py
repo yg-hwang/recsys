@@ -15,12 +15,12 @@ class FeatureLabelEncoder(LabelEncoder):
     - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용 (특수 토큰 '-1', '<UNK>'를 강제로 포함)
     - `fit()`: 컬럼별 고유값으로 인코더 학습
     - `transform()`: 학습된 인코더로 각 컬럼을 정수로 치환 (in-place 할당)
-    - `inverse_transform()`: 정수 -> 원래 라벨로 복원
+    - `inverse_transform()`: 정수 -> 원래 label로 복원
     """
 
     def __init__(self):
         super().__init__()
-        self._all_classes = {}  # 컬럼별 고유 클래스(Label) 저장
+        self._all_classes = {}  # 컬럼별 고유 label class 저장
         self._all_encoders = {}  # 컬럼별 LabelEncoder 객체 저장
         self.special_tokens = ["-1", "<UNK>"]
 
@@ -63,7 +63,7 @@ class FeatureLabelEncoder(LabelEncoder):
 
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        정수로 인코딩된 각 컬럼을 원래 라벨로 복원
+        정수로 인코딩된 각 컬럼을 원래 label로 복원
         - LabelEncoder.inverse_transform은 1D 배열을 기대하므로 컬럼별로 개별 호출
         """
 
