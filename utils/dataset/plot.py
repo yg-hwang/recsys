@@ -39,12 +39,12 @@ def show_items(
         axes = [axes]  # 1행일 때도 반복문 수행
     axes = np.array(axes).reshape(rows, cols)
 
-    for idx, pid in enumerate(item_ids):
+    for idx, item_id in enumerate(item_ids):
         row, col = divmod(idx, cols)
         ax = axes[row, col]
 
         # 해당 상품 정보 가져오기
-        item = df_item[df_item["item_id"] == pid].iloc[0]
+        item = df_item[df_item["item_id"] == item_id].iloc[0]
         item_name = item["name"]
 
         # 속성 문자열 만들기
@@ -55,7 +55,7 @@ def show_items(
             attr_text += f"\nScore: {scores[idx]:.3f}"
 
         # 이미지 경로
-        img_path = os.path.join(image_dir, f"{pid}.jpg")
+        img_path = os.path.join(image_dir, f"{item_id}.jpg")
         if os.path.exists(img_path):
             img = Image.open(img_path)
             ax.imshow(img)
