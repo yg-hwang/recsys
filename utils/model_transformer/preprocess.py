@@ -225,6 +225,7 @@ class SequenceGenerator:
                     total_skipped += 1
                     continue
                 seqs.append(seq)
+
             return seqs
 
         for idx, col_name in enumerate(feature_sequences):
@@ -315,6 +316,7 @@ class SequentialDataset(Dataset):
         self,
         df: pd.DataFrame,
         feature_sequences: List[str],
+        action_sequence: str = None,
         targets: List[str] = None,
         device: str = "cpu",
     ):
@@ -324,6 +326,7 @@ class SequentialDataset(Dataset):
 
         :param df: 시퀀스 데이터셋 (SequenceGenerator 결과)
         :param feature_sequences: 입력 feature로 사용할 컬럼명
+        :param action_sequence: 행동 가중치로 사용할 컬럼명
         :param targets: 예측할 target label 컬럼명
         :param device: 텐서를 저장할 장치 (CPU/GPU)
         """
@@ -346,10 +349,21 @@ class SequentialDataset(Dataset):
                 # shape = (num_samples, max_seq_len)
                 x = np.array([np.array(x).astype(np.float32) for x in df[feature]])
                 self.masks = torch.from_numpy(x).to(device)
+            elif feature == action_sequence:
+                continue
             else:
                 # 나머지 feature는 정수형 시퀀스 (category_id 등)
                 x = np.array([np.array(x).astype(np.int32) for x in df[feature]])
                 self.feature_sequences[feature] = torch.from_numpy(x).to(device)
+
+        # -----------------------------------------------
+        # 행동 가중치 시퀀스 준비
+        # -----------------------------------------------
+        if action_sequence is not None:
+            x = np.array([np.array(x).astype(np.int32) for x in df[action_sequence]])
+            self.action_sequence = torch.from_numpy(x).to(device)
+        else:
+            self.action_sequence = None
 
         # -----------------------------------------------
         # target label
@@ -387,17 +401,30 @@ class SequentialDataset(Dataset):
             for feature_name, sequence in self.feature_sequences.items()
         }
 
-        # target이 있으면 feature, mask, target 반환 (학습 및 검증용)
+        # target이 있으면 target까지 반환 (학습 및 검증용)
         if self.targets is not None:
             targets = {
                 target_name: classes[idx]
                 for target_name, classes in self.targets.items()
             }
-            return feature_sequences, self.masks[idx], targets
+            # 행동 시퀀스가 있을 때
+            if self.action_sequence is not None:
+                return (
+                    feature_sequences,
+                    self.action_sequence[idx],
+                    self.masks[idx],
+                    targets,
+                )
+            # 행동 시퀀스가 없을 때
+            else:
+                return feature_sequences, self.masks[idx], targets
 
-        # target이 없으면 feature, mask만 반환 (추론용)
+        # target이 없으면 모델 입력 값만 반환 (추론용)
         else:
-            return feature_sequences, self.masks[idx]
+            if self.action_sequence is not None:
+                return feature_sequences, self.action_sequence[idx], self.masks[idx]
+            else:
+                return feature_sequences, self.masks[idx]
 
 
 class SequenceVectorDataset(Dataset):

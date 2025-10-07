@@ -15,6 +15,7 @@ class SimpleTransformer(nn.Module):
     def __init__(
         self,
         feature_dims: Dict[str, int],
+        action_weights: Dict[int, Union[int, float]] = None,
         embedding_dim: int = 64,
         seq_len: int = 10,
         n_heads: int = 2,
@@ -24,6 +25,7 @@ class SimpleTransformer(nn.Module):
     ):
         """
         :param feature_dims: 입력 feature 이름과 feature별 클래스 개수
+        :param action_weights: 행동 가중치 (예: {0: 1.0, 1: 2.0, 2: 3.0, 3: 4.0})
         :param embedding_dim: 각 feature를 임베딩할 차원 크기(Transformer Encoder 임베딩 차원과 동일)
         :param seq_len: 시퀀스 길이
         :param n_heads: Transformer multi-head attention 개수
@@ -53,9 +55,8 @@ class SimpleTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Transformer Encoder Layer
+        # Positional Encoding + Transformer Encoder Layer
         # -----------------------------------------------
-        # Transformer 기본 단위: self-attention + feedforward 블록
         encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads)
 
         # 위치 정보를 넣기 위한 Positional Encoding
@@ -63,7 +64,7 @@ class SimpleTransformer(nn.Module):
             dim_model=embedding_dim, max_len=seq_len
         )
 
-        # Transformer encoder 레이어
+        # Transformer encoder
         self.transformer = nn.TransformerEncoder(
             encoder_layer=encoder_layer, num_layers=n_layers
         )
@@ -79,6 +80,11 @@ class SimpleTransformer(nn.Module):
                 for feature_name, n_classes in output_dims.items()
             }
         )
+
+        # -----------------------------------------------
+        # Action Weight 설정
+        # -----------------------------------------------
+        self.action_weights = action_weights or {}
 
     def _apply_pooling(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -105,6 +111,7 @@ class SimpleTransformer(nn.Module):
     def forward(
         self,
         feature_sequences: Dict[str, torch.Tensor],
+        action_sequence: torch.Tensor = None,
         masks: Union[List[torch.Tensor], torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -117,6 +124,7 @@ class SimpleTransformer(nn.Module):
         6) task tower를 통해 각 task 예측
 
         :param feature_sequences: {feature_name: 시퀀스 텐서}
+        :param action_sequence: 행동 시퀀스 텐서
         :param masks: padding mask (batch_size, seq_len)
         :return: (sequence vector, {target_name: 예측 로짓})
         """
@@ -132,19 +140,30 @@ class SimpleTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Transformer 입력 형식 맞추기
+        # Action Weight 적용 (고정 가중치)
+        # -----------------------------------------------
+        if action_sequence is not None and self.action_weights:
+            # 행동 ID -> 가중치 값 매핑용 룩업 벡터 생성
+            action_indices = [int(k) for k in self.action_weights.keys()]
+            max_id = max(max(action_indices), int(action_sequence.max().item()))
+            lookup = torch.ones(max_id + 1, device=x_embed.device, dtype=x_embed.dtype)
+            for k, v in self.action_weights.items():
+                lookup[int(k)] = float(v)
+
+            # (batch, seq_len) -> (batch, seq_len, 1) broadcasting 곱
+            weights = lookup[action_sequence.long()].unsqueeze(-1)
+            x_embed = x_embed * weights
+
+        # -----------------------------------------------
+        #  Transformer 입력 변환
         # -----------------------------------------------
         # Transformer는 (seq_len, batch_size, embedding_dim) 입력을 기대
         x_embed = x_embed.permute(1, 0, 2)
 
-        # -----------------------------------------------
         # Positional Encoding 추가
-        # -----------------------------------------------
         x_embed = self.position_encoding(x_embed)
 
-        # -----------------------------------------------
         # Transformer Encoder 적용
-        # -----------------------------------------------
         # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
         x_embed = self.transformer(x_embed, src_key_padding_mask=masks)
 
@@ -159,7 +178,7 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         # Vector Representation (Pooling)
         # -----------------------------------------------
-        # 최종 feature vector (batch_size, embedding_dim)
+        # 최종 sequence vector (batch_size, embedding_dim)
         x_final = self._apply_pooling(x_embed)
 
         return x_final, y_outputs

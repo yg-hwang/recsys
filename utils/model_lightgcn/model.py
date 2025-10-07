@@ -117,7 +117,7 @@ class Model:
             # -----------------------------------------------
             # ANN 검색: 유저 벡터 기준 Top-K 아이템 후보 검색
             # -----------------------------------------------
-            result = search(data["user_vector"], self.item_index, top_k=50)
+            result = search(data["user_vector"], self.item_index, top_k=100)
 
             # 추천 상품 후보군 인덱스
             item_indies = list(result.keys())
@@ -129,6 +129,9 @@ class Model:
             for i in item_indies:
                 item_id = self.item_id_maps[i]
                 candidates[item_id] = result[i]
+            candidates = dict(
+                sorted(candidates.items(), key=lambda x: x[1], reverse=True)
+            )
 
             # -----------------------------------------------
             # 결과 저장 (입력 유저가 여러 개일 수 있음)

@@ -12,7 +12,14 @@
         "sub_category": 39,
         "article_type": 122,
         "fit": 9,
-        "occasion": 15
+        "occasion": 15,
+        "action": 6
+    },
+    "action_weights": {
+        "3": 1,
+        "5": 2,
+        "2": 3,
+        "4": 4
     },
     "embedding_dim": 64,
     "output_dims": {

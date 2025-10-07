@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 from typing import List, Dict
@@ -9,10 +8,11 @@ from bentoml.io import JSON
 # -----------------------------------------------
 # 1) 프로젝트 경로 설정
 # -----------------------------------------------
-# - 프로젝트 root 경로를 계산하여 sys.path에 추가 (로컬 모듈 import 오류 방지 목적)
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# setup_env를 import하기 위해 루트 경로 추가
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+from setup_env import setup_path
+
+root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 
 # -----------------------------------------------
 # 2) 모델 불러오기
@@ -23,9 +23,7 @@ from utils.model_transformer.model import Model as Transformer
 from utils.model_lightgcn.model import Model as LightGCN
 
 # 모델 저장 디렉토리 경로
-current_dir = os.path.abspath(os.curdir)
-base_dir = "/".join(current_dir.split("/")[:-2])
-model_dir = Path(base_dir).joinpath(f"data/model/fashion")
+model_dir = Path(root_dir).joinpath("data/model/fashion")
 
 # 실제 모델 객체 메모리에 로드
 model_transformer = Transformer(model_dir=model_dir)
