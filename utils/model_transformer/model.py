@@ -200,20 +200,20 @@ class Model:
                 # Softmax 확률 계산 (seq_len * batch_size, n_classes)
                 probs_flat = torch.softmax(logits_flat, dim=-1)
 
-                # argmax로 예측 클래스 인덱스
+                # argmax로 예측 label 인덱스 추출 (batch_size * seq_len)
                 y_pred_ids = logits_flat.argmax(dim=-1)
 
-                # 예측 클래스의 확률 값 추출
+                # 예측 label의 확률 값 추출
                 y_pred_probs = probs_flat[torch.arange(len(y_pred_ids)), y_pred_ids]
 
                 # numpy 변환
                 y_pred_ids = y_pred_ids.detach().cpu().numpy()
                 y_pred_probs = y_pred_probs.detach().cpu().numpy()
 
-                # 라벨 복원
+                # label class 복원
                 y_pred_labels = self.encoder[target].inverse_transform(y_pred_ids)
 
-                # 클래스별 확률 평균
+                # label class별 확률 평균
                 label_probs: Dict[str, List[float]] = {}
                 for label, prob in zip(y_pred_labels, y_pred_probs):
                     if label not in label_probs:
@@ -221,6 +221,8 @@ class Model:
                     label_probs[label].append(prob)
 
                 # 평균값으로 단순화
+                # - 시퀀스 전체에서 어떤 속성이 얼마나 강하게 예측되는지를 feature별로 요약한 것
+                # - 현재 유저가 관심 가질 가능성이 높은 상품 속성을 pre-filter로 사용 가능
                 outputs[target] = {
                     str(label): float(np.mean(probs))
                     for label, probs in label_probs.items()

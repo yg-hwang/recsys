@@ -39,7 +39,7 @@ def build_index(
     # 인덱스 초기화 (최대 `num`개 벡터, 그래프 연결정도 `M`, 구축 탐색 폭 `ef_construction`)
     index.init_index(max_elements=num, M=M, ef_construction=ef_construction)
 
-    # 내부 라벨: 0 ~ num-1
+    # 내부 label index: 0 ~ num-1
     labels = np.arange(num, dtype=np.int32)
     index.add_items(vectors, labels)
 
