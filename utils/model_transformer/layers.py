@@ -3,14 +3,14 @@ import torch.nn as nn
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, dim_model: int, max_len: int = 20):
+    def __init__(self, dim_model: int, max_len: int = 10):
         """
         위치 임베딩(Positional Encoding) 클래스
         - Transformer는 RNN처럼 순차적 구조가 없으므로,
           입력 토큰의 순서를 알 수 있도록 sin, cos 함수를 이용한 위치 정보를 추가하기 위한 기능
 
-        :param dim_model: 임베딩 차원 크기 (예: 64, 128)
-        :param max_len: 시퀀스 최대 길이 (예: 20)
+        :param dim_model: 임베딩 차원 크기
+        :param max_len: 시퀀스 최대 길이
         """
         super(PositionalEncoding, self).__init__()
 
@@ -71,3 +71,39 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[: x.size(0), :]
 
         return x
+
+
+class LearnablePositionalEncoding(nn.Module):
+    def __init__(self, dim_model: int, max_len: int = 20, dropout: float = 0.0):
+        """
+        학습 가능한 (learnable) 위치 임베딩 클래스
+        - 기존 sin/cos 기반 absolute encoding 대신 학습 가능한 embedding 사용
+        - 모델이 직접 위치별 중요도를 학습하게 함
+
+        :param dim_model: 임베딩 차원 크기
+        :param max_len: 시퀀스 최대 길이
+        :param dropout: 위치 인코딩 추가 후 dropout 비율 (optional)
+        """
+        super().__init__()
+        self.pos_embedding = nn.Embedding(max_len, dim_model)
+        self.dropout = nn.Dropout(p=dropout)
+
+        # 파라미터 초기화 (Transformer 논문 방식)
+        nn.init.normal_(self.pos_embedding.weight, mean=0.0, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: 입력 텐서 (seq_len, batch_size, embedding_dim)
+        :return: 위치 인코딩이 더해진 텐서 (seq_len, batch_size, embedding_dim)
+        """
+        seq_len, batch_size, embedding_dim = x.size()
+
+        # 각 위치 인덱스 생성: [0, 1, 2, ..., seq_len-1]
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(1)
+        # 위치 embedding lookup 후 broadcast (seq_len, embedding_dim)
+        pe = self.pos_embedding(positions)
+
+        # 입력 x에 더하고 dropout
+        x = x + pe
+
+        return self.dropout(x)

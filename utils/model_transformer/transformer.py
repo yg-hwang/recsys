@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import List, Dict, Tuple, Union, Literal
 
-from .layers import PositionalEncoding
+from .layers import LearnablePositionalEncoding
 
 
 class SimpleTransformer(nn.Module):
@@ -21,7 +21,7 @@ class SimpleTransformer(nn.Module):
         n_heads: int = 2,
         n_layers: int = 2,
         output_dims: Dict[str, int] = None,
-        global_pool: Literal["last", "avg", "max", "sum"] = "sum",
+        global_pool: Literal["last", "avg", "max", "sum"] = "avg",
     ):
         """
         :param feature_dims: 입력 feature 이름과 feature별 클래스 개수
@@ -60,7 +60,7 @@ class SimpleTransformer(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads)
 
         # 위치 정보를 넣기 위한 Positional Encoding
-        self.position_encoding = PositionalEncoding(
+        self.position_encoding = LearnablePositionalEncoding(
             dim_model=embedding_dim, max_len=seq_len
         )
 
@@ -86,23 +86,48 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         self.action_weights = action_weights or {}
 
-    def _apply_pooling(self, x: torch.Tensor) -> torch.Tensor:
+    def _apply_pooling(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         Transformer 출력 시퀀스를 하나의 벡터로 요약
-        입력: (seq_len, batch_size, hidden_dim)
-        출력: (batch_size, hidden_dim)
+        입력: (seq_len, batch_size, embedding_dim)
+        출력: (batch_size, embedding_dim)
         """
 
+        # mask 형태 변환: (seq_len, batch_size, 1)
+        # valid 위치: 1, pad 위치: 0
+        valid_mask = (1 - mask.float()).T.unsqueeze(-1)
+
+        # 패딩 토큰 무시 (mask가 0인 위치는 곱하면 0됨)
+        masked_x = x * valid_mask
+
+        # pooling 방식별 처리
         match self.global_pool:
             case "last":
-                return x[-1]
+                # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch,)
+                valid_lengths = valid_mask.sum(dim=0).squeeze(-1)
+                # 음수 방지
+                last_indices = (valid_lengths - 1).clamp(min=0).long()
+                batch_indices = torch.arange(x.size(1), device=x.device)
+                # (batch_size, embedding_dim)
+                return masked_x[last_indices, batch_indices]
+
             case "avg":
-                return torch.mean(x, dim=0)
-            case "max":
-                x, _ = torch.max(x, dim=0)
-                return x
+                # 유효 토큰만 평균
+                sum_x = masked_x.sum(dim=0)
+                # 각 배치의 유효 토큰 수 (batch, 1)
+                denom = valid_mask.sum(dim=0).clamp(min=1.0)
+                return sum_x / denom
+
             case "sum":
-                return torch.sum(x, dim=0)
+                # 유효 토큰만 합산
+                return masked_x.sum(dim=0)
+
+            case "max":
+                # 유효 토큰이 없는 위치는 -inf로 채움
+                masked_x = masked_x.masked_fill(valid_mask == 0, float("-inf"))
+                x, _ = masked_x.max(dim=0)
+                return x
+
             case _:
                 raise ValueError(
                     "`global_pool` must be 'last', 'avg', 'max', or 'sum'."
@@ -179,6 +204,6 @@ class SimpleTransformer(nn.Module):
         # Vector Representation (Pooling)
         # -----------------------------------------------
         # 최종 sequence vector (batch_size, embedding_dim)
-        x_final = self._apply_pooling(x_embed)
+        x_final = self._apply_pooling(x_embed, masks)
 
         return x_final, y_outputs
