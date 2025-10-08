@@ -58,6 +58,7 @@ def get_vector_index() -> Tuple[hnswlib.Index, dict]:
 
 
 df_user_metadata, df_item_metadata, df_user_logs = get_metadata()
+df_item_metadata["name"] = df_item_metadata["name"].astype(str)
 item_index, item_id_maps = get_vector_index()
 
 
@@ -241,35 +242,9 @@ def show_candidates(
         cols[idx].image(img_path, width="stretch")
         if scores is not None:
             cols[idx].caption(f"{i+1}) **Score: {round(df_sub['score'].item(), 4)}**")
-        cols[idx].dataframe(df_sub.T.rename(columns={0: "상품 상세"}))
-
-    # if scores is not None:
-    #     data = {int(item_id): score for item_id, score in zip(item_ids, scores)}
-    #     df_candidates["score"] = df_candidates["item_id"].map(data)
-    #     candidates = df_candidates.to_dict("records")
-    #     candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
-    # else:
-    #     candidates = df_candidates.to_dict("records")
-    #
-    # cols = st.columns(n_columns)
-    #
-    # for i, d in enumerate(candidates):
-    #     img_path = paths.base_path.joinpath(f"images/{d['item_id']}.jpg")
-    #     idx = i % n_columns
-    #     cols[idx].image(img_path, width="stretch")
-    #     cols[idx].caption(f"{i+1}) **Score: {round(d.get('score', 0), 4)}**")
-    #     cols[idx].caption(f"- Item ID: {d['item_id']}")
-    #     cols[idx].caption(f"- Name: **{d['name']}**")
-    #     cols[idx].caption(f"- Brand: **{d['brand_name']}**")
-    #     cols[idx].caption(f"- Gender: **{d['gender']}**")
-    #     cols[idx].caption(f"- Age: **{d['age_group']}**")
-    #     cols[idx].caption(f"- Master Category: **{d['master_category']}**")
-    #     cols[idx].caption(f"- Sub Category: **{d['sub_category']}**")
-    #     cols[idx].caption(f"- Article Type: **{d['article_type']}**")
-    #     cols[idx].caption(f"- Color: **{d['base_color']}**")
-    #     cols[idx].caption(f"- Season: **{d['season']}**")
-    #     cols[idx].caption(f"- Year: **{d['year']}**")
-    #     cols[idx].caption(f"- Usage: **{d['usage']}**")
+        df_sub = df_sub.T.rename(columns={0: "상품 상세"})
+        df_sub["상품 상세"] = df_sub["상품 상세"].astype(str)
+        cols[idx].dataframe(df_sub)
 
 
 # -----------------------------------------------
