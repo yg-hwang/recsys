@@ -268,12 +268,15 @@ class Model:
                 self.reg_model.eval()
                 item_vector = (
                     self.reg_model(
-                        torch.from_numpy(seq_vector).to(self.device).unsqueeze(0)
+                        torch.from_numpy(seq_vector.astype(np.float32))
+                        .to(self.device)
+                        .unsqueeze(0)
                     )
                     .squeeze()
                     .detach()
                     .numpy()
                 )
+                item_vector = item_vector / np.linalg.norm(item_vector)
 
             # -----------------------------------------------
             # 최종 결과 저장

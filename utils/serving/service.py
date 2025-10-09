@@ -6,7 +6,7 @@ import bentoml
 from bentoml.io import JSON
 
 # -----------------------------------------------
-# 1) 프로젝트 경로 설정
+# 프로젝트 경로 설정
 # -----------------------------------------------
 # setup_env를 import하기 위해 루트 경로 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -15,7 +15,7 @@ from setup_env import setup_path
 root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 
 # -----------------------------------------------
-# 2) 모델 불러오기
+# 모델 불러오기
 # -----------------------------------------------
 # - Transformer: 시퀀스 기반 추천 모델 (Sequential Transformer + Projection)
 # - LightGCN: 협업 필터링 기반 추천 모델
@@ -30,14 +30,14 @@ model_transformer = Transformer(model_dir=model_dir)
 model_lightgcn = LightGCN(model_dir=model_dir)
 
 # -----------------------------------------------
-# 3) BentoML 서비스 정의
+# BentoML 서비스 정의
 # -----------------------------------------------
 # - 서비스 이름은 "rec_service"
 svc = bentoml.Service("rec_service")
 
 
 # -----------------------------------------------
-# 4) API 엔드포인트 정의
+# API 엔드포인트 정의
 # -----------------------------------------------
 @svc.api(input=JSON(), output=JSON())
 def predict_lightgcn(input_data: List[Dict[str, any]]) -> dict:
@@ -60,7 +60,7 @@ def predict_transformer(input_data: List[Dict[str, any]]) -> dict:
 
 
 # -----------------------------------------------
-# 5) 모델 Reload API
+# 모델 Reload API
 # -----------------------------------------------
 # - 새로운 checkpoint가 저장되었을 때 호출하면 메모리에 올려둔 모델을 다시 로드하여 반영
 @svc.api(input=JSON(), output=JSON())
