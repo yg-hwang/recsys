@@ -55,5 +55,6 @@ class MultiOutputRegressor(nn.Module):
 
         # 출력층: Linear (64차원 아이템 벡터로 매핑)
         x = self.output_layer(x)
+        x = F.normalize(x, dim=-1)
 
         return x

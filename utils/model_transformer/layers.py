@@ -2,6 +2,17 @@ import torch
 import torch.nn as nn
 
 
+class EmbeddingWithNorm(nn.Module):
+    def __init__(self, num_embeddings: int, embedding_dim: int, dropout: float = 0.0):
+        super().__init__()
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.norm = nn.LayerNorm(embedding_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.norm(self.embedding(x)))
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self, dim_model: int, max_len: int = 10):
         """

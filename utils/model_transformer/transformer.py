@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import List, Dict, Tuple, Union, Literal
 
-from .layers import LearnablePositionalEncoding
+from .layers import EmbeddingWithNorm, LearnablePositionalEncoding
 
 
 class SimpleTransformer(nn.Module):
@@ -21,7 +21,7 @@ class SimpleTransformer(nn.Module):
         n_heads: int = 2,
         n_layers: int = 2,
         output_dims: Dict[str, int] = None,
-        global_pool: Literal["last", "avg", "max", "sum"] = "avg",
+        global_pool: Literal["last", "avg", "max", "sum"] = "last",
     ):
         """
         :param feature_dims: 입력 feature 이름과 feature별 클래스 개수
@@ -49,8 +49,8 @@ class SimpleTransformer(nn.Module):
         # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
         self.embeddings = nn.ModuleDict(
             {
-                feature_name: nn.Embedding(n_classes, embedding_dim)
-                for feature_name, n_classes in feature_dims.items()
+                name: EmbeddingWithNorm(n_classes, embedding_dim)
+                for name, n_classes in feature_dims.items()
             }
         )
 
@@ -149,7 +149,7 @@ class SimpleTransformer(nn.Module):
         6) task tower를 통해 각 task 예측
 
         :param feature_sequences: {feature_name: 시퀀스 텐서}
-        :param action_sequence: 행동 시퀀스 텐서
+        :param action_sequence: (선택) 행동 시퀀스 텐서
         :param masks: padding mask (batch_size, seq_len)
         :return: (sequence vector, {target_name: 예측 로짓})
         """

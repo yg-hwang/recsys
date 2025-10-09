@@ -352,6 +352,7 @@ if USER_ID != "":
             if actions:
                 inputs["action"] = actions
             response = predict_transformer(user_id=USER_ID, inputs=inputs)
+            st.write(response["predictions"][0]["outputs"])
             query_vector = np.array(response["predictions"][0]["item_vector"])
             candidates = search_vectors(query_vector=query_vector)
             item_ids = list(candidates.keys())
