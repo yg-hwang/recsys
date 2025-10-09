@@ -1,14 +1,11 @@
-# 추천 시스템 데모 만들기  
-> LightGCN + TransformerEncoder + ANN 기반 추천 시스템 구축 & BentoML 모델 서빙
+# Recommendation System Demo  
 
 ---
 
 ## 개요
 
-이 프로젝트는 **추천 시스템 강의 실습용 데모 시스템**으로,  
-사용자 행동 로그를 기반으로 임베딩을 학습하고  
-LightGCN, TransformerEncoder, ANN을 활용하여 **실시간 추천 파이프라인**을 구현합니다.
-
+**추천 시스템 강의 실습용**으로, 사용자 행동 로그를 기반으로 LightGCN, TransformerEncoder, ANN을 활용하여 **실시간 추천 파이프라인**을 구현합니다.
+ㄴ
 ---
 
 ## 핵심 구조
@@ -20,14 +17,8 @@ LightGCN, TransformerEncoder, ANN을 활용하여 **실시간 추천 파이프�
 | **3️⃣ ANN 기반 후보군 검색 (Retrieval)** | LightGCN 기반 ANN, Transformer 기반 ANN 각각으로 추천 후보군 생성 |
 | **4️⃣ 모델 서빙 (BentoML)** | 학습된 모델을 BentoML로 패키징 후 REST API 형태로 배포 |
 
----
 
 ## 개발 환경
-
-| 항목 | 권장 버전 |
-|------|-----------|
-| Python | 3.10 ~ 3.12 |
-| PyTorch | >= 2.2 |
-| CUDA Toolkit | >= 11.8 |
-| OS | macOS / Windows / Linux / Google Colab |
-| RAM | 8GB 이상 (GPU VRAM 4GB 이상 권장) |
+- Python (3.12)
+- Docker (Latest)
+- 

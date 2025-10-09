@@ -7,6 +7,18 @@ from pathlib import Path
 from matplotlib import font_manager, rcParams
 
 
+# -----------------------------------------------
+# 🔹 1. setup_env가 import될 때 자동으로 recsys 경로 추가
+# -----------------------------------------------
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = CURRENT_FILE.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+    # 선택적으로 로그 출력 가능 (수강생 혼동 방지 위해 False로 유지)
+    # print(f"[setup_env] Auto-added to sys.path: {PROJECT_ROOT}")
+
+
 def setup_path(target_root: str = "recsys", verbose: bool = False) -> Path:
     """
     프로젝트 루트(recsys) 경로를 sys.path에 자동 추가
