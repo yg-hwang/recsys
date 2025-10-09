@@ -19,11 +19,11 @@ root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 # -----------------------------------------------
 # - Transformer: 시퀀스 기반 추천 모델 (Sequential Transformer + Projection)
 # - LightGCN: 협업 필터링 기반 추천 모델
-from utils.model_transformer.model import Model as Transformer
-from utils.model_lightgcn.model import Model as LightGCN
+from models.transformer.model import Model as Transformer
+from models.lightgcn.model import Model as LightGCN
 
 # 모델 저장 디렉토리 경로
-model_dir = Path(root_dir).joinpath("data/model/fashion")
+model_dir = Path(root_dir).joinpath("data/outputs/fashion")
 
 # 실제 모델 객체 메모리에 로드
 model_transformer = Transformer(model_dir=model_dir)

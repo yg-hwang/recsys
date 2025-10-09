@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ANN 빌드 및 검색 함수 불러오기
-from utils.model_ann.ann import build_index, search
+from utils.retriever.ann import build_index, search
 
 
 class Model:

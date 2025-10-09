@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 from typing import List, Tuple
+from pymilvus import Collection
 
 
 # -----------------------------------------------
@@ -18,7 +19,8 @@ from setup_env import setup_path
 root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 
 from utils.dataset.config import DatasetPath
-from utils.model_ann.ann import build_index, search
+from utils.retriever.ann import build_index, search
+from utils.retriever.vector_db import connect_milvus, build_filter_expr, search_milvus
 
 
 # -----------------------------------------------
@@ -44,7 +46,7 @@ def get_metadata() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 @st.cache_resource
 def get_vector_index() -> Tuple[hnswlib.Index, dict]:
     """
-    시퀀스 기반 상품 추천에 사용할 Vector 인덱스 로드 (Vector DB라고 가정)
+    시퀀스 기반 상품 추천에 사용할 Vector 인덱스 로드 (임시 Vector DB라고 가정)
     """
     df_image_vectors = pd.read_parquet(paths.image_vectors_path)
     image_vectors = np.array(df_image_vectors["image_vector"].tolist())
@@ -60,6 +62,17 @@ def get_vector_index() -> Tuple[hnswlib.Index, dict]:
 df_user_metadata, df_item_metadata, df_user_logs = get_metadata()
 df_item_metadata["name"] = df_item_metadata["name"].astype(str)
 item_index, item_id_maps = get_vector_index()
+
+
+@st.cache_resource
+def get_milvus_connection() -> Collection:
+    """
+    시퀀스 기반 상품 추천에 사용할 Milvus Vector Database 연결 객체
+    """
+    return connect_milvus()
+
+
+collection = connect_milvus()
 
 
 @st.cache_resource
@@ -352,9 +365,29 @@ if USER_ID != "":
             if actions:
                 inputs["action"] = actions
             response = predict_transformer(user_id=USER_ID, inputs=inputs)
-            st.write(response["predictions"][0]["outputs"])
+
+            outputs = response["predictions"][0]["outputs"]
             query_vector = np.array(response["predictions"][0]["item_vector"])
-            candidates = search_vectors(query_vector=query_vector)
+
+            expr = build_filter_expr(
+                outputs=outputs,
+                key=["master_category", "sub_category", "article_type", "gender"],
+                top_k_per_feature=3,
+            )
+
+            with st.expander("예측값 및 필터링 보기"):
+                col_1, col_2 = st.columns(2)
+                col_1.write(outputs)
+                col_2.write(expr)
+
+            results = search_milvus(
+                collection=collection, item_vector=query_vector, expr=expr, limit=100
+            )
+
+            candidates = {}
+            for hit in results:
+                candidates[int(hit.entity.get("item_id"))] = hit.score
+
             item_ids = list(candidates.keys())
             scores = list(candidates.values())
             show_candidates(item_ids=item_ids, scores=scores)
