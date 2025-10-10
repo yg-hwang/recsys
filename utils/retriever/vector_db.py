@@ -27,7 +27,7 @@ def connect_milvus(
     connections.connect(alias="default", host=host, port=port)
     collection = Collection(collection_name)
     collection.load()
-    print(f">>> Connected to Milvus collection: {collection_name}")
+
     return collection
 
 
@@ -78,15 +78,10 @@ def build_filter_expr(
 
         # 확률 상위 K개의 라벨 추출
         sorted_labels = sorted(probs.items(), key=lambda x: x[1], reverse=True)
-        top_labels = [
-            f'{feature} == "{label}"' for label, _ in sorted_labels[:top_k_per_feature]
-        ]
+        top_labels = [label for label, _ in sorted_labels[:top_k_per_feature]]
 
-        # 여러 값이면 OR 조건으로 묶기
-        if len(top_labels) > 1:
-            expr_parts.append("(" + " or ".join(top_labels) + ")")
-        else:
-            expr_parts.append(top_labels[0])
+        label_str = ", ".join([f'"{label}"' for label in top_labels])
+        expr_parts.append(f"{feature} in [{label_str}]")
 
     expr = " and ".join(expr_parts) if expr_parts else ""
 
@@ -140,21 +135,3 @@ def search_milvus(
     )
 
     return results[0]
-
-
-# -----------------------------------------------
-# 통합 실행 함수
-# -----------------------------------------------
-def recommend_from_transformer(
-    outputs: dict,
-    item_vector: np.ndarray,
-    vector_field: str = "image_vector",
-    limit: int = 10,
-):
-    """
-    Transformer 예측 결과(outputs)와 item_vector를 받아서 Milvus 검색 수행 후 결과 반환
-    """
-    collection = connect_milvus()
-    expr = build_filter_expr(outputs)
-    results = search_milvus(collection, item_vector, expr, vector_field, limit)
-    return results

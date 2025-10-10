@@ -377,8 +377,10 @@ if USER_ID != "":
 
             with st.expander("예측값 및 필터링 보기"):
                 col_1, col_2 = st.columns(2)
+                col_1.markdown("#### 예측값")
                 col_1.write(outputs)
-                col_2.write(expr)
+                col_2.markdown("#### 필터링")
+                col_2.write(expr.split(" and "))
 
             results = search_milvus(
                 collection=collection, item_vector=query_vector, expr=expr, limit=100
