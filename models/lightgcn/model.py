@@ -6,7 +6,7 @@ from typing import Dict, Union, List
 
 
 # -----------------------------------------------
-# 프로젝트 루트 경로 설정
+# 프로젝트 경로 설정
 # -----------------------------------------------
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -29,12 +29,8 @@ class Model:
         # 모델 경로 및 데이터 로드
         # -----------------------------------------------
         self.model_dir = Path(model_dir).resolve()
-        df_user_vectors = pd.read_parquet(
-            model_dir.joinpath("lightgcn/user_vector.parquet")
-        )
-        df_item_vectors = pd.read_parquet(
-            model_dir.joinpath("lightgcn/item_vector.parquet")
-        )
+        df_user_vectors = pd.read_parquet(model_dir.joinpath("user_vector.parquet"))
+        df_item_vectors = pd.read_parquet(model_dir.joinpath("item_vector.parquet"))
 
         # -----------------------------------------------
         # 매핑 딕셔너리 생성

@@ -1,6 +1,7 @@
 import hnswlib
 import numpy as np
-from typing import Dict
+from pathlib import Path
+from typing import Dict, Union
 
 
 def build_index(
@@ -10,7 +11,8 @@ def build_index(
     M: int = 16,
     ef_construction: int = 128,
     ef: int = 32,
-    num_threads: int | None = None,
+    num_threads: int = None,
+    save_path: Union[str, Path] = None,
 ) -> hnswlib.Index:
     """
     주어진 벡터로 hnswlib 인덱스 빌드
@@ -24,6 +26,7 @@ def build_index(
     :param ef_construction: 빌드 시 탐색 폭
     :param ef: 검색 시 탐색 폭(리콜↑, 속도↓)
     :param num_threads: 검색에 사용할 스레드 수 (None이면 라이브러리 기본값)
+    :param save_path: 인덱스 저장 경로
     :return: hnswlib Index
     """
 
@@ -49,6 +52,9 @@ def build_index(
     # 멀티스레드 검색 설정
     if num_threads is not None:
         index.set_num_threads(num_threads)
+
+    if save_path is not None:
+        index.save_index(str(save_path))
 
     return index
 

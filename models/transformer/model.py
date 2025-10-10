@@ -10,25 +10,34 @@ from .regressor import MultiOutputRegressor
 
 
 class Model:
-    def __init__(self, model_dir: Union[str, Path], padding_value: int = 0):
+    def __init__(
+        self,
+        seq_model_dir: Union[str, Path],
+        reg_model_dir: Union[str, Path],
+        padding_value: int = 0,
+    ):
+        """
+        :param seq_model_dir: 트랜스포머 기반 시퀀스 학습 모델
+        :param reg_model_dir: 시퀀스 to 상품 벡터 Projection 학습 모델
+        :param padding_value: 시퀀스 패딩 값
+        """
 
-        self.model_dir = Path(model_dir).resolve()
+        self.seq_model_dir = Path(seq_model_dir).resolve()
+        self.reg_model_dir = Path(reg_model_dir).resolve()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # -----------------------------------------------
         # Model: Transformer
         # -----------------------------------------------
-        model = "transformer"
-
         # 학습 시 저장해둔 Transformer 설정(config) 로드
-        f = open(self.model_dir.joinpath(f"{model}/checkpoint/model_config.json"))
+        f = open(self.seq_model_dir.joinpath("checkpoint/model_config.json"))
         self.seq_model_config = json.load(f)
 
         # Transformer 모델 생성 및 가중치 로드
         self.seq_model = SimpleTransformer(**self.seq_model_config)
         self.seq_model.load_state_dict(
             torch.load(
-                f=model_dir.joinpath(f"{model}/checkpoint/model.pt"),
+                f=self.seq_model_dir.joinpath("checkpoint/model.pt"),
                 map_location=torch.device(self.device),
                 weights_only=True,
             )
@@ -41,7 +50,7 @@ class Model:
         # feature별 LabelEncoder 로드
         self.encoder = {
             feature: joblib.load(
-                model_dir.joinpath(f"{model}/label_encoders/{feature}.joblib")
+                self.seq_model_dir.joinpath(f"label_encoders/{feature}.joblib")
             )
             for feature in self.seq_model_config["feature_dims"].keys()
         }
@@ -52,14 +61,14 @@ class Model:
         model = "regressor"
 
         # projection 모델 설정(config) 로드
-        f = open(self.model_dir.joinpath(f"{model}/checkpoint/model_config.json"))
+        f = open(self.reg_model_dir.joinpath("checkpoint/model_config.json"))
         self.reg_model_config = json.load(f)
 
         # projection 모델 생성 및 가중치 로드
         self.reg_model = MultiOutputRegressor(**self.reg_model_config)
         self.reg_model.load_state_dict(
             torch.load(
-                f=model_dir.joinpath(f"{model}/checkpoint/model.pt"),
+                f=self.reg_model_dir.joinpath("checkpoint/model.pt"),
                 map_location=torch.device(self.device),
                 weights_only=True,
             )

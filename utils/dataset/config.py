@@ -71,20 +71,6 @@ class DatasetPath:
         """
         return self.base_path / "text_vectors.parquet"
 
-    @property
-    def text_ann_index_path(self) -> Path:
-        """
-        아이템 텍스트 벡터로 빌드한 ANN 인덱스 저장 경로
-        """
-        return self.base_path / "text_ann.index"
-
-    @property
-    def image_ann_index_path(self) -> Path:
-        """
-        아이템 이미지 벡터로 빌드한 ANN 인덱스 저장 경로
-        """
-        return self.base_path / "image_ann.index"
-
     # -----------------------------------------------
     # 유틸 함수
     # -----------------------------------------------
