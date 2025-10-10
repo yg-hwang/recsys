@@ -17,17 +17,24 @@ root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 # -----------------------------------------------
 # 모델 불러오기
 # -----------------------------------------------
-# - Transformer: 시퀀스 기반 추천 모델 (Sequential Transformer + Projection)
+# - Transformer: 시퀀스 기반 추천 모델 (Transformer + Projection)
 # - LightGCN: 협업 필터링 기반 추천 모델
 from models.transformer.model import Model as Transformer
 from models.lightgcn.model import Model as LightGCN
 
-# 모델 저장 디렉토리 경로
-model_dir = Path(root_dir).joinpath("data/outputs/fashion")
+seq_model_artifact = bentoml.models.get("transformer:latest")
+reg_model_artifact = bentoml.models.get("regressor:latest")
+seq_model_dir = Path(seq_model_artifact.path_of("artifact"))
+reg_model_dir = Path(reg_model_artifact.path_of("artifact"))
 
-# 실제 모델 객체 메모리에 로드
-model_transformer = Transformer(model_dir=model_dir)
-model_lightgcn = LightGCN(model_dir=model_dir)
+lightgcn_model_artifact = bentoml.models.get("lightgcn:latest")
+lightgcn_model_dir = Path(lightgcn_model_artifact.path_of("artifact"))
+
+model_transformer = Transformer(
+    seq_model_dir=seq_model_dir, reg_model_dir=reg_model_dir
+)
+model_lightgcn = LightGCN(model_dir=lightgcn_model_dir)
+
 
 # -----------------------------------------------
 # BentoML 서비스 정의
@@ -75,7 +82,11 @@ def reload_model_lightgcn(_: dict) -> dict:
     `curl -X POST http://localhost:3000/reload_model_lightgcn -H "Content-Type: application/json" -d '{}'`
     """
     global model_lightgcn
-    model_lightgcn = LightGCN(model_dir=model_dir)
+
+    lightgcn_model_artifact = bentoml.models.get("lightgcn:latest")
+    lightgcn_model_dir = Path(lightgcn_model_artifact.path_of("artifact"))
+    model_lightgcn = LightGCN(model_dir=lightgcn_model_dir)
+
     return {"status": "ok", "message": "Model reloaded successfully."}
 
 
@@ -91,5 +102,13 @@ def reload_model_transformer(_: dict) -> dict:
     `curl -X POST http://localhost:3000/reload_model_transformer -H "Content-Type: application/json" -d '{}'`
     """
     global model_transformer
-    model_transformer = Transformer(model_dir=model_dir)
+
+    seq_model_artifact = bentoml.models.get("transformer:latest")
+    reg_model_artifact = bentoml.models.get("regressor:latest")
+    seq_model_dir = Path(seq_model_artifact.path_of("artifact"))
+    reg_model_dir = Path(reg_model_artifact.path_of("artifact"))
+    model_transformer = Transformer(
+        seq_model_dir=seq_model_dir, reg_model_dir=reg_model_dir
+    )
+
     return {"status": "ok", "message": "Model reloaded successfully."}
