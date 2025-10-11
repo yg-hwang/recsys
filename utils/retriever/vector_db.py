@@ -1,6 +1,6 @@
 import pymilvus
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Union
 from pymilvus import connections, Collection
 
 
@@ -35,55 +35,59 @@ def connect_milvus(
 # Transformer 예측 결과(JSON) -> 필터 expr 생성
 # -----------------------------------------------
 def build_filter_expr(
-    outputs: Dict[str, Dict[str, float]],
+    data: Dict[str, Dict[str, float]],
     top_k_per_feature: int = 1,
     key: List[str] = None,
-) -> str:
+    proba_threshold: Union[int, float] = 0.0,
+) -> Union[str, None]:
     """
     Transformer 예측 결과를 Milvus Boolean filter expression으로 변환
     - 모델이 feature별로 예측한 label 확률 분포를 받아,
-    - 각 feature에 대해 확률 상위 K개의 라벨만 사용하여 OR로 묶고,
+    - 각 feature에 대해 확률 상위 K개의 label class만 사용하여 OR로 묶고,
     - feature 간에는 AND로 결합한 expr을 생성합니다.
 
-    :param outputs: Transformer의 feature별 예측 결과
-    :param top_k_per_feature: 각 feature에서 채택할 상위 라벨 개수
+    :param data: Transformer의 feature별 예측 결과
+    :param top_k_per_feature: 각 feature에서 채택할 상위 label class 개수
     :param key: 필터에 사용할 특정 feature 목록 (예: ['gender', 'article_type'])
+    :param proba_threshold: label class 확률 최솟값 (예: 0.9 -> 0.9 이상인 값만 채택)
     :return: Milvus `expr` 문자열 (예: 'gender == "Women" and article_type == "Tshirts"')
 
     Example:
-        >>> outputs = {"gender": {"Women": 1.0}, "article_type": {"Tshirts": 0.99, "Shoes": 0.4}}
-        >>> build_filter_expr(outputs, top_k_per_feature=1)
+        >>> data = {"gender": {"Women": 1.0}, "article_type": {"Tshirts": 0.99, "Shoes": 0.4}}
+        >>> build_filter_expr(data, top_k_per_feature=1)
         'gender == "Women" and article_type == "Tshirts"'
     """
 
-    if not outputs:
+    if not data:
         raise ValueError(
-            "`outputs`가 비어 있습니다. 최소 1개 이상의 feature가 필요합니다."
+            "`data`가 비어 있습니다. 최소 1개 이상의 feature가 필요합니다."
         )
     if top_k_per_feature < 1:
         raise ValueError("`top_k_per_feature`는 1 이상이어야 합니다.")
 
-    expr_parts = []
-
     # key가 지정된 경우 해당 feature만 사용
-    target_features = key if key is not None else list(outputs.keys())
+    target_features = key if key is not None else list(data.keys())
 
+    expr_parts = []
     for feature in target_features:
-        if feature not in outputs:
+        if feature not in data:
             continue
 
-        probs = outputs[feature]
-        if not probs:
-            continue
-
-        # 확률 상위 K개의 라벨 추출
+        # 확률 상위 K개의 label class 추출
+        probs = data[feature]
         sorted_labels = sorted(probs.items(), key=lambda x: x[1], reverse=True)
-        top_labels = [label for label, _ in sorted_labels[:top_k_per_feature]]
+        top_labels = []
+        for label, prob in sorted_labels[:top_k_per_feature]:
+            # `proba_threshold` 조건을 만족하는 것만 (단, 토큰이 '<UNK>'인 것은 반영 X)
+            if prob >= proba_threshold and label != "<UNK>":
+                top_labels.append(label)
+        if not top_labels:
+            continue
 
         label_str = ", ".join([f'"{label}"' for label in top_labels])
         expr_parts.append(f"{feature} in [{label_str}]")
 
-    expr = " and ".join(expr_parts) if expr_parts else ""
+    expr = " and ".join(expr_parts) if expr_parts else None
 
     return expr
 
@@ -94,7 +98,7 @@ def build_filter_expr(
 def search_milvus(
     collection: Collection,
     item_vector: np.ndarray,
-    expr: str,
+    expr: str = None,
     vector_field: str = "image_vector",
     limit: int = 10,
 ) -> List[pymilvus.client.abstract.Hit]:

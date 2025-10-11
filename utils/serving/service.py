@@ -19,8 +19,8 @@ root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 # -----------------------------------------------
 # - Transformer: 시퀀스 기반 추천 모델 (Transformer + Projection)
 # - LightGCN: 협업 필터링 기반 추천 모델
-from models.transformer.model import Model as Transformer
 from models.lightgcn.model import Model as LightGCN
+from models.transformer.model import Model as Transformer
 
 seq_model_artifact = bentoml.models.get("transformer:latest")
 reg_model_artifact = bentoml.models.get("regressor:latest")
@@ -47,19 +47,28 @@ svc = bentoml.Service("rec_service")
 # API 엔드포인트 정의
 # -----------------------------------------------
 @svc.api(input=JSON(), output=JSON())
-def predict_lightgcn(input_data: List[Dict[str, any]]) -> dict:
+def predict_lightgcn(body: Dict[str, any]) -> dict:
     """
-    LightGCN 모델 기반 추천 아이템 제공 API
+    LightGCN 모델 기반 추천 API
     - 입력: JSON (유저 ID)
     - 출력: JSON (추천 결과)
+
+    body 예시:
+    {
+        "input_data": [{"user_id": 123}, {"user_id": 456}],
+        "top_k": 50
+    }
     """
-    return {"predictions": model_lightgcn.predict(input_data)}
+    input_data = body.get("input_data", [])
+    top_k = body.get("top_k", 100)
+
+    return {"predictions": model_lightgcn.predict(input_data=input_data, top_k=top_k)}
 
 
 @svc.api(input=JSON(), output=JSON())
 def predict_transformer(input_data: List[Dict[str, any]]) -> dict:
     """
-    Transformer 기반 시퀀스 추천 아이템 제공 API
+    Transformer 기반 시퀀스 추천 API
     - 입력: JSON (Feature Sequence)
     - 출력: JSON (예측된 feature 후보, seq_vector, item_vector)
     """
