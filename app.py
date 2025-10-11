@@ -277,44 +277,35 @@ if USER_ID != "":
     if MODEL == "transformer":
         st.markdown("### 상품 입력")
         with st.container(border=True):
-            col_1, col_2 = st.columns(2)
-            ITEM_IDS = col_1.text_input(
-                label="상품 ID",
+            ITEM_IDS = st.text_input(
+                label="상품 ID 시퀀스",
                 value="",
-                placeholder="두 개 이상 입력 시 쉼표 구분 (예: 123, 234)",
+                placeholder="상품 ID 입력 (예: 123 혹은 123, 234)",
             )
 
             if ITEM_IDS != "":
                 item_ids = [int(item_id.strip()) for item_id in ITEM_IDS.split(",")]
-                with st.expander("상품 상세 보기"):
-                    show_candidates(item_ids=item_ids, image_only=IMAGE_ONLY)
             else:
                 item_ids = []
                 st.stop()
 
-            cols = col_2.columns(len(item_ids))
+            cols = st.columns(len(item_ids))
             actions = []
             for i, col in enumerate(cols):
                 ACTION = col.selectbox(
-                    label=f"{i+1}) 상품 {item_ids[i]} ",
+                    label=f"{i+1}) ID: **{item_ids[i]}**",
                     options=["click", "wishlist", "cart", "purchase"],
                     index=0,
                 )
                 actions.append(ACTION)
 
-            if actions:
-                if len(actions) > len(item_ids):
-                    col_2.error(
-                        f"행동 시퀀스가 상품의 길이와 맞지 않습니다. (상품 시퀀스 길이: {len(item_ids)})"
-                    )
-                    st.stop()
+            if len(item_ids) > 5:
+                st.warning(
+                    f"현재 모델의 고정된 시퀀스 길이는 5입니다. 앞 쪽부터 다섯 개의 상품 시퀀스만 사용합니다. ({item_ids[:5]})"
+                )
 
-                for a in actions:
-                    if a not in ["click", "wishlist", "cart", "purchase"]:
-                        col_2.error(
-                            "올바른 값을 입력하세요. (입력 가능 값: **`click`**, **`wishlist`**, **`cart`**, **`purchase`**)"
-                        )
-                        st.stop()
+            with st.expander("상품 상세 보기"):
+                show_candidates(item_ids=item_ids, image_only=IMAGE_ONLY)
 
         st.markdown("### 추천 상품")
         with st.container(border=True):
@@ -356,25 +347,24 @@ if USER_ID != "":
             with st.expander("예측값 및 필터링 보기"):
                 col_1, col_2 = st.columns(2)
 
-                col_1.markdown("#### 예측값 원본")
+                col_1.markdown("#### 모델 예측값 원본")
                 col_1.write(outputs)
 
                 col_2.markdown("#### 필터링 조건")
                 KEY = col_2.multiselect(
-                    label="필터링 Feature",
+                    label="**1️⃣ 필터링 Feature**",
                     options=sorted(list(outputs.keys())),
                     placeholder="예: ['master_category', 'sub_category', 'article_type', 'gender']",
                 )
-                col_2_1, col_2_2 = col_2.columns(2)
-                TOP_K_PER_FEATURE = col_2_1.number_input(
-                    label="Feature별 상위 label class 개수",
+                TOP_K_PER_FEATURE = col_2.number_input(
+                    label="**2️⃣ Feature별 상위 label class 개수**",
                     min_value=2,
                     max_value=5,
                     step=1,
-                    value=3,
+                    value=2,
                 )
-                PROBA_THRESHOLD = col_2_2.number_input(
-                    label="label class 확률 최솟값",
+                PROBA_THRESHOLD = col_2.number_input(
+                    label="**3️⃣ label class 확률 최솟값**",
                     min_value=0.0,
                     max_value=1.0,
                     step=0.1,
@@ -387,7 +377,7 @@ if USER_ID != "":
                     proba_threshold=PROBA_THRESHOLD,
                 )
                 if filter_expr is None:
-                    col_2.write(f"> 필터링 조건식이 없습니다.")
+                    col_2.write(f"> **필터링 조건식이 없습니다.**")
                 else:
                     col_2.write(f"> **{filter_expr}**")
 
