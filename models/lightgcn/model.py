@@ -82,11 +82,14 @@ class Model:
 
         return body
 
-    def predict(self, input_data: List[Dict[str, any]]) -> List[Dict[str, any]]:
+    def predict(
+        self, input_data: List[Dict[str, any]], top_k: int = 100
+    ) -> List[Dict[str, any]]:
         """
         추천 아이템 ID 및 점수 반환
 
         :param input_data: request body 리스트 (각 원소에 user_id 포함)
+        :param top_k: 상품 후보군 개수
         :return: results
                  예시:
                  [
@@ -113,7 +116,7 @@ class Model:
             # -----------------------------------------------
             # ANN 검색: 유저 벡터 기준 Top-K 아이템 후보 검색
             # -----------------------------------------------
-            result = search(data["user_vector"], self.item_index, top_k=100)
+            result = search(data["user_vector"], self.item_index, top_k=top_k)
 
             # 추천 상품 후보군 인덱스
             item_indies = list(result.keys())

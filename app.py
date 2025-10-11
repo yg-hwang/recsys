@@ -1,5 +1,4 @@
 import sys
-import hnswlib
 import requests
 import numpy as np
 import pandas as pd
@@ -19,7 +18,6 @@ from setup_env import setup_path
 root_dir = setup_path()  # recsys 루트를 sys.path에 추가
 
 from utils.dataset.config import DatasetPath
-from utils.retriever.ann import build_index, search
 from utils.retriever.vector_db import connect_milvus, build_filter_expr, search_milvus
 
 
@@ -31,7 +29,7 @@ paths = DatasetPath(base_dir=dataset_dir, dataset_name="fashion")
 
 
 @st.cache_resource
-def get_metadata() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def get_database() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     유저, 상품 및 클릭스트림 데이터 로드 (DB라고 가정)
     """
@@ -43,25 +41,8 @@ def get_metadata() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     )
 
 
-@st.cache_resource
-def get_vector_index() -> Tuple[hnswlib.Index, dict]:
-    """
-    시퀀스 기반 상품 추천에 사용할 Vector 인덱스 로드 (임시 Vector DB라고 가정)
-    """
-    df_image_vectors = pd.read_parquet(paths.image_vectors_path)
-    image_vectors = np.array(df_image_vectors["image_vector"].tolist())
-    image_vectors = np.array(image_vectors).astype(np.float32)
-    item_index = build_index(image_vectors)
-    item_id_maps = dict(
-        zip(df_image_vectors["item_id"].index, df_image_vectors["item_id"])
-    )
-
-    return item_index, item_id_maps
-
-
-df_user_metadata, df_item_metadata, df_user_logs = get_metadata()
+df_user_metadata, df_item_metadata, df_user_logs = get_database()
 df_item_metadata["name"] = df_item_metadata["name"].astype(str)
-item_index, item_id_maps = get_vector_index()
 
 
 @st.cache_resource
@@ -107,24 +88,7 @@ def get_user_logs(user_id: int) -> pd.DataFrame:
     )
 
 
-@st.cache_resource
-def search_vectors(query_vector: np.ndarray, top_k: int = 30) -> dict:
-    result = search(query_vector, item_index, top_k=top_k)
-
-    # 추천 아이템 Index (원본 ID가 아닌 별도의 인덱스)
-    item_indies = list(result.keys())
-
-    # 추천 아이템 ID 재매핑
-    candidates = {}
-    for i in item_indies:
-        # 원본 ID로 매핑
-        item_id = item_id_maps[i]
-        candidates[int(item_id)] = result[i]
-
-    return candidates
-
-
-def predict_lightgcn(user_id: int) -> dict:
+def predict_lightgcn(user_id: int, top_k: int = 100) -> dict:
     """
     LightGCN 기반 추천 상품 예측
 
@@ -143,10 +107,10 @@ def predict_lightgcn(user_id: int) -> dict:
     url = "http://localhost:3000/predict_lightgcn"
 
     # 입력: user_id (추천 대상 유저)
-    payload = [{"user_id": user_id}]
+    body = {"input_data": [{"user_id": user_id}], "top_k": top_k}
 
     # REST API 호출 -> JSON 응답 획득
-    response = requests.post(url, json=payload)
+    response = requests.post(url, json=body)
 
     return response.json()
 
@@ -216,16 +180,19 @@ def predict_transformer(user_id: int, inputs: dict) -> dict:
     url = "http://localhost:3000/predict_transformer"
 
     # 입력: user_id & 상품 시퀀스
-    payload = [{"user_id": user_id, "inputs": inputs}]
+    body = [{"user_id": user_id, "inputs": inputs}]
 
     # REST API 호출 -> JSON 응답 획득
-    response = requests.post(url, json=payload)
+    response = requests.post(url, json=body)
 
     return response.json()
 
 
 def show_candidates(
-    item_ids: List[int], scores: List[float] = None, n_columns: int = 5
+    item_ids: List[int],
+    scores: List[float] = None,
+    n_columns: int = 5,
+    image_only: bool = False,
 ) -> None:
     """
     상품 화면 표시
@@ -255,6 +222,8 @@ def show_candidates(
         cols[idx].image(img_path, width="stretch")
         if scores is not None:
             cols[idx].caption(f"{i+1}) **Score: {round(df_sub['score'].item(), 4)}**")
+        if image_only:
+            continue
         df_sub = df_sub.T.rename(columns={0: "상품 상세"})
         df_sub["상품 상세"] = df_sub["상품 상세"].astype(str)
         cols[idx].dataframe(df_sub)
@@ -265,19 +234,20 @@ def show_candidates(
 # -----------------------------------------------
 st.set_page_config(layout="wide")
 
-if st.button("새로고침"):
+if st.sidebar.button("새로고침"):
     st.cache_data.clear()
     st.cache_resource.clear()
-
 
 MODEL = st.sidebar.selectbox(
     label="MODEL", options=["lightgcn", "transformer"], index=0
 )
-
-
 USER_ID = st.sidebar.text_input(
     label="USER ID", value="", placeholder="USER ID를 입력하세요."
 )
+TOP_K = st.sidebar.number_input(
+    label="추천 상품 개수", min_value=10, max_value=100, value=50, step=5
+)
+IMAGE_ONLY = st.sidebar.toggle(label="썸네일만 보기", value=False)
 
 if USER_ID != "":
     USER_ID = int(USER_ID)
@@ -293,16 +263,16 @@ if USER_ID != "":
             df_user_history = get_user_logs(user_id=USER_ID)
             item_ids = df_user_history["item_id"].astype(int).tolist()
             st.write(df_user_history)
-            show_candidates(item_ids=item_ids)
+            show_candidates(item_ids=item_ids, image_only=IMAGE_ONLY)
 
     if MODEL == "lightgcn":
         st.markdown("### 추천 상품")
         with st.container(border=True):
-            response = predict_lightgcn(user_id=USER_ID)
+            response = predict_lightgcn(user_id=USER_ID, top_k=TOP_K)
             candidates = response["predictions"][0]["candidates"]
             item_ids = [int(item_id) for item_id in list(candidates.keys())]
             scores = list(candidates.values())
-            show_candidates(item_ids=item_ids, scores=scores)
+            show_candidates(item_ids=item_ids, scores=scores, image_only=IMAGE_ONLY)
 
     if MODEL == "transformer":
         st.markdown("### 상품 입력")
@@ -313,21 +283,26 @@ if USER_ID != "":
                 value="",
                 placeholder="두 개 이상 입력 시 쉼표 구분 (예: 123, 234)",
             )
-            ACTIONS = col_2.text_input(
-                label="(선택) 행동 시퀀스",
-                value="",
-                placeholder="두 개 이상 입력 시 쉼표 구분 (예: click, wishlist)",
-            )
+
             if ITEM_IDS != "":
                 item_ids = [int(item_id.strip()) for item_id in ITEM_IDS.split(",")]
                 with st.expander("상품 상세 보기"):
-                    show_candidates(item_ids=item_ids)
+                    show_candidates(item_ids=item_ids, image_only=IMAGE_ONLY)
             else:
                 item_ids = []
                 st.stop()
 
-            if ACTIONS:
-                actions = [action.strip() for action in ACTIONS.split(",")]
+            cols = col_2.columns(len(item_ids))
+            actions = []
+            for i, col in enumerate(cols):
+                ACTION = col.selectbox(
+                    label=f"{i+1}) 상품 {item_ids[i]} ",
+                    options=["click", "wishlist", "cart", "purchase"],
+                    index=0,
+                )
+                actions.append(ACTION)
+
+            if actions:
                 if len(actions) > len(item_ids):
                     col_2.error(
                         f"행동 시퀀스가 상품의 길이와 맞지 않습니다. (상품 시퀀스 길이: {len(item_ids)})"
@@ -340,8 +315,6 @@ if USER_ID != "":
                             "올바른 값을 입력하세요. (입력 가능 값: **`click`**, **`wishlist`**, **`cart`**, **`purchase`**)"
                         )
                         st.stop()
-            else:
-                actions = []
 
         st.markdown("### 추천 상품")
         with st.container(border=True):
@@ -367,23 +340,62 @@ if USER_ID != "":
             response = predict_transformer(user_id=USER_ID, inputs=inputs)
 
             outputs = response["predictions"][0]["outputs"]
+            # 상위 key 기준 오름차순 정렬
+            outputs = dict(sorted(outputs.items(), key=lambda x: x[0]))
+
+            # 각 하위 dict을 value 기준 내림차순 정렬
+            for key, sub_dict in outputs.items():
+                sorted_sub = dict(
+                    sorted(sub_dict.items(), key=lambda x: x[1], reverse=True)
+                )
+                outputs[key] = sorted_sub
+
             query_vector = np.array(response["predictions"][0]["item_vector"])
 
-            expr = build_filter_expr(
-                outputs=outputs,
-                key=["master_category", "sub_category", "article_type", "gender"],
-                top_k_per_feature=3,
-            )
-
+            filter_expr = None
             with st.expander("예측값 및 필터링 보기"):
                 col_1, col_2 = st.columns(2)
-                col_1.markdown("#### 예측값")
+
+                col_1.markdown("#### 예측값 원본")
                 col_1.write(outputs)
-                col_2.markdown("#### 필터링")
-                col_2.write(expr.split(" and "))
+
+                col_2.markdown("#### 필터링 조건")
+                KEY = col_2.multiselect(
+                    label="필터링 Feature",
+                    options=sorted(list(outputs.keys())),
+                    placeholder="예: ['master_category', 'sub_category', 'article_type', 'gender']",
+                )
+                col_2_1, col_2_2 = col_2.columns(2)
+                TOP_K_PER_FEATURE = col_2_1.number_input(
+                    label="Feature별 상위 label class 개수",
+                    min_value=2,
+                    max_value=5,
+                    step=1,
+                    value=3,
+                )
+                PROBA_THRESHOLD = col_2_2.number_input(
+                    label="label class 확률 최솟값",
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.1,
+                    value=0.0,
+                )
+                filter_expr = build_filter_expr(
+                    data=outputs,
+                    key=KEY,
+                    top_k_per_feature=TOP_K_PER_FEATURE,
+                    proba_threshold=PROBA_THRESHOLD,
+                )
+                if filter_expr is None:
+                    col_2.write(f"> 필터링 조건식이 없습니다.")
+                else:
+                    col_2.write(f"> **{filter_expr}**")
 
             results = search_milvus(
-                collection=collection, item_vector=query_vector, expr=expr, limit=100
+                collection=collection,
+                item_vector=query_vector,
+                expr=filter_expr,
+                limit=TOP_K,
             )
 
             candidates = {}
@@ -392,4 +404,4 @@ if USER_ID != "":
 
             item_ids = list(candidates.keys())
             scores = list(candidates.values())
-            show_candidates(item_ids=item_ids, scores=scores)
+            show_candidates(item_ids=item_ids, scores=scores, image_only=IMAGE_ONLY)
