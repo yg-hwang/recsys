@@ -43,7 +43,7 @@ def setup_path(target_root: str = "recsys", verbose: bool = False) -> Path:
 
 
 def setup_font(
-    root_dir: Path, font_path: str = "data/NanumGothic-Bold.ttf", size: int = 12
+    root_dir: Path, font_path: str = "assets/NanumGothic-Bold.ttf", size: int = 12
 ) -> None:
     """
     Matplotlib 시각화를 위한 한글 폰트 설정
