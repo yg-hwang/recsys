@@ -25,7 +25,7 @@ def setup_path(target_root: str = "recsys", verbose: bool = False) -> Path:
 
     :param target_root: 프로젝트 루트 폴더 이름 (기본값: "recsys")
     :param verbose: 경로 추가 로그를 출력할지 여부
-    :return: Path 객체 형태의 루트 디렉토리
+    :return: Path 객체 형태의 루트 경로
     """
     root_dir = Path.cwd()
 

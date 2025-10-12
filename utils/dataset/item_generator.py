@@ -49,11 +49,11 @@ class ProductNameGenerator:
 
 def generate_items(domain_class: Type, num_items: int = 10000) -> pd.DataFrame:
     """
-    도메인 클래스 기반으로 아이템 메타데이터를 생성하고 저장하는 함수
+    도메인 클래스 기반으로 아이템 메타데이터 생성 및 저장
 
     :param domain_class: 도메인 클래스 (예: Fashion, Food, Book 등)
     :param num_items: 생성할 아이템 수
-    :return: 아이템 메타데이터 DataFrame (item_id, title, 속성...)
+    :return: DataFrame (item_id, title, 속성...)
     """
 
     # -----------------------------------------------
