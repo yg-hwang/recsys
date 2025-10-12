@@ -7,8 +7,7 @@ from datetime import datetime, timedelta
 
 class ClickstreamGenerator:
     """
-    가상 클릭스트림(유저 세션 로그)을 생성하는 클래스
-    - 유저가 아이템을 탐색하고 행동(action)을 수행하는 로그를 시뮬레이션
+    가상의 Clickstream 데이터셋 생성기
     """
 
     def __init__(
@@ -71,8 +70,8 @@ class ClickstreamGenerator:
     def simulate_user_sessions(self, user_id: str) -> List[Dict]:
         """
         특정 유저의 세션 로그 생성
-        - anchor 아이템을 랜덤 선택 -> 유사 아이템 일부 탐색
-        - 각 아이템에 대해 행동(action), timestamp 부여
+        - `anchor` 아이템을 랜덤 선택 -> 유사 아이템 일부 탐색
+        - 각 아이템에 대해 `action`, `timestamp` 부여
         - user metadata, item metadata 병합
         """
         session_rows = []
@@ -146,7 +145,7 @@ def generate_clickstream(
 ):
     """
     클릭스트림 로그 데이터셋 생성 함수
-    - item_metadata, user_metadata parquet 파일을 불러와 시뮬레이션 실행
+    - `item_metadata`, `user_metadata` parquet 파일을 불러와 시뮬레이션 실행
     - `users_per_chunk` 단위로 나눠서 parquet 파일로 저장
     """
 

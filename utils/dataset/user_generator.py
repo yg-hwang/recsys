@@ -72,7 +72,7 @@ def generate_users(
         # 성별 확률이 주어지지 않으면 균등 분포로 설정
         gender_probs = [1.0 / len(genders)] * len(genders)
     if abs(sum(gender_probs) - 1.0) > 1e-8:
-        raise ValueError("gender_probs의 합은 1이어야 합니다.")
+        raise ValueError("`gender_probs`의 합은 1이어야 합니다.")
 
     # 성별 샘플링
     genders_sampled = rng.choice(genders, size=num_users, p=gender_probs)

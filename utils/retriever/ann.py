@@ -24,7 +24,7 @@ def build_index(
                   - "l2": L2 거리(작을수록 유사)
     :param M: 그래프의 연결 정도
     :param ef_construction: 빌드 시 탐색 폭
-    :param ef: 검색 시 탐색 폭(리콜↑, 속도↓)
+    :param ef: 검색 시 탐색 폭 (클수록 검색 정확도는 높아지지만 속도는 저하될 수 있음)
     :param num_threads: 검색에 사용할 스레드 수 (None이면 라이브러리 기본값)
     :param save_path: 인덱스 저장 경로
     :return: hnswlib Index

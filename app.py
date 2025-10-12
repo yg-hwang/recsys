@@ -11,7 +11,7 @@ from pymilvus import Collection
 # -----------------------------------------------
 # 프로젝트 경로 설정
 # -----------------------------------------------
-# setup_env를 import하기 위해 루트 경로 추가
+# `setup_env.py`를 import하기 위해 루트 경로 추가
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from setup_env import setup_path
 

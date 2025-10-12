@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 @dataclass
 class DatasetPath:
     """
-    데이터셋 저장 경로를 관리하는 Config 클래스
-    - dataset_name(예: "fashion")별로 하위 폴더를 자동 생성
+    데이터셋 저장 경로 클래스
+    - `dataset_name`(예: "fashion")별로 하위 폴더를 자동 생성
     - item & user metadata, user logs, text & image vectors 등 데이터셋 구성 요소별 경로를 프로퍼티로 제공
     """
 
