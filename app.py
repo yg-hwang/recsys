@@ -25,7 +25,7 @@ from utils.retriever.vector_db import connect_milvus, build_filter_expr, search_
 # 유저 및 상품 조회, API 호출 등을 실행할 함수
 # -----------------------------------------------
 dataset_dir = Path(root_dir).joinpath("data/dataset")
-paths = DatasetPath(base_dir=dataset_dir, dataset_name="fashion")
+paths = DatasetPath(root_dir=dataset_dir, dataset_name="fashion")
 
 
 @st.cache_resource
@@ -214,7 +214,7 @@ def show_candidates(
 
     cols = st.columns(n_columns)
     for i, item_id in enumerate(item_ids):
-        img_path = paths.base_path.joinpath(f"images/{item_id}.jpg")
+        img_path = paths.dataset_dir.joinpath(f"images/{item_id}.jpg")
         df_sub = df_candidates[df_candidates["item_id"] == item_id].reset_index(
             drop=True
         )
