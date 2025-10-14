@@ -5,7 +5,11 @@ torch==2.7.1
 scikit-learn==1.7.2
 scipy==1.15.2
 numpy==2.1.3
+polars==1.32.3
 pandas==2.3.3
+swifter==1.4.0
+umap-learn==0.5.8
+umap-learn[plot]==0.5.8
 bentoml==1.4.2
 
 # -----------------------------------------------
@@ -36,3 +40,4 @@ ipywidgets==8.1.7
 # Optional (for logging / plotting)
 # -----------------------------------------------
 tqdm==4.67.1
+plotly==6.1.2
