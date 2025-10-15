@@ -1,2 +1,18 @@
+# venv
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+volumes/
+
+# uv cache
+.uv/
+.uv-cache/
+
+# IDE
+.DS_Store
+.idea/
+
+# etc.
+*.key
+*.bin
