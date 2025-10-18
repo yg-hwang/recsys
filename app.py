@@ -3,6 +3,7 @@ import requests
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.figure_factory as ff
 from pathlib import Path
 from typing import List, Tuple
 from pymilvus import Collection
@@ -15,7 +16,7 @@ from pymilvus import Collection
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from setup_env import setup_path
 
-root_dir = setup_path()  # recsys 루트를 sys.path에 추가
+root_dir = setup_path()
 
 from utils.dataset.config import DatasetPath
 from utils.retriever.vector_db import connect_milvus, build_filter_expr, search_milvus
@@ -115,7 +116,9 @@ def predict_lightgcn(user_id: int, top_k: int = 100) -> dict:
     return response.json()
 
 
-def predict_transformer(user_id: int, inputs: dict) -> dict:
+def predict_transformer(
+    user_id: int, item_ids: List[int], actions: List[str] = None
+) -> dict:
     """
     Transformer 기반 추천 상품 예측
 
@@ -179,8 +182,28 @@ def predict_transformer(user_id: int, inputs: dict) -> dict:
     """
     url = "http://localhost:3000/predict_transformer"
 
+    # 입력 값 전처리
+    df_item_info = get_item_info(item_ids=item_ids)
+    input_columns = [
+        "age_group",
+        "article_type",
+        "base_color",
+        "brand_name",
+        "fit",
+        "gender",
+        "master_category",
+        "occasion",
+        "season",
+        "sub_category",
+        "usage",
+        "year",
+    ]
+    inputs = df_item_info[input_columns].to_dict(orient="list")
+    if actions:
+        inputs["action"] = actions
+
     # 입력: user_id & 상품 시퀀스
-    body = [{"user_id": user_id, "inputs": inputs}]
+    body = {"input_data": [{"user_id": user_id, "inputs": inputs}]}
 
     # REST API 호출 -> JSON 응답 획득
     response = requests.post(url, json=body)
@@ -188,6 +211,7 @@ def predict_transformer(user_id: int, inputs: dict) -> dict:
     return response.json()
 
 
+@st.cache_resource
 def show_candidates(
     item_ids: List[int],
     scores: List[float] = None,
@@ -229,17 +253,20 @@ def show_candidates(
         cols[idx].dataframe(df_sub)
 
 
-# -----------------------------------------------
-# 앱 화면 표시 부분 (UI)
-# -----------------------------------------------
+# =================================================================================
+#                               앱 화면 표시 부분 (UI)
+# =================================================================================
 st.set_page_config(layout="wide")
 
 if st.sidebar.button("새로고침"):
     st.cache_data.clear()
     st.cache_resource.clear()
 
+# -----------------------------------------------
+# 모델, 유저, 상품 개수 등 선택
+# -----------------------------------------------
 MODEL = st.sidebar.selectbox(
-    label="MODEL", options=["lightgcn", "transformer"], index=0
+    label="MODEL", options=["LightGCN", "Transformer"], index=0
 )
 USER_ID = st.sidebar.text_input(
     label="USER ID", value="", placeholder="USER ID를 입력하세요."
@@ -251,30 +278,43 @@ IMAGE_ONLY = st.sidebar.toggle(label="썸네일만 보기", value=False)
 
 if USER_ID != "":
     USER_ID = int(USER_ID)
+
+    # -----------------------------------------------
+    # 사용자 정보 표시
+    # -----------------------------------------------
     st.markdown("### 사용자 정보")
+    user_info = get_user_info(USER_ID)
+    df_user_history = get_user_logs(user_id=USER_ID)
+    item_ids = df_user_history["item_id"].astype(int).tolist()
     with st.container(border=True):
-        user_info = get_user_info(USER_ID)
         cols = st.columns(3)
         cols[0].metric("USER ID", USER_ID)
         cols[1].metric("AGE", user_info["age"].item())
         cols[2].metric("GENDER", user_info["gender"].item())
 
         with st.expander("탐색 및 구매 이력"):
-            df_user_history = get_user_logs(user_id=USER_ID)
-            item_ids = df_user_history["item_id"].astype(int).tolist()
             st.write(df_user_history)
             show_candidates(item_ids=item_ids, image_only=IMAGE_ONLY)
 
-    if MODEL == "lightgcn":
+    # -----------------------------------------------
+    # LightGCN 모델 추천 결과 표시
+    # -----------------------------------------------
+    if MODEL == "LightGCN":
         st.markdown("### 추천 상품")
+
+        response = predict_lightgcn(user_id=USER_ID, top_k=TOP_K)
+        candidates = response["predictions"][0]["candidates"]
+        item_ids = [int(item_id) for item_id in list(candidates.keys())]
+        scores = list(candidates.values())
+        candidates_lightgcn = dict(zip(item_ids, scores))
+
         with st.container(border=True):
-            response = predict_lightgcn(user_id=USER_ID, top_k=TOP_K)
-            candidates = response["predictions"][0]["candidates"]
-            item_ids = [int(item_id) for item_id in list(candidates.keys())]
-            scores = list(candidates.values())
             show_candidates(item_ids=item_ids, scores=scores, image_only=IMAGE_ONLY)
 
-    if MODEL == "transformer":
+    # -----------------------------------------------
+    # Transformer 모델 추천 결과 표시
+    # -----------------------------------------------
+    if MODEL == "Transformer":
         st.markdown("### 상품 입력")
         with st.container(border=True):
             ITEM_IDS = st.text_input(
@@ -309,29 +349,12 @@ if USER_ID != "":
 
         st.markdown("### 추천 상품")
         with st.container(border=True):
-
-            df_item_info = get_item_info(item_ids=item_ids)
-            input_columns = [
-                "age_group",
-                "article_type",
-                "base_color",
-                "brand_name",
-                "fit",
-                "gender",
-                "master_category",
-                "occasion",
-                "season",
-                "sub_category",
-                "usage",
-                "year",
-            ]
-            inputs = df_item_info[input_columns].to_dict(orient="list")
-            if actions:
-                inputs["action"] = actions
-            response = predict_transformer(user_id=USER_ID, inputs=inputs)
+            response = predict_transformer(
+                user_id=USER_ID, item_ids=item_ids, actions=actions
+            )
 
             outputs = response["predictions"][0]["outputs"]
-            # 상위 key 기준 오름차순 정렬
+            # key 오름차순 정렬
             outputs = dict(sorted(outputs.items(), key=lambda x: x[0]))
 
             # 각 하위 dict을 value 기준 내림차순 정렬
@@ -394,4 +417,5 @@ if USER_ID != "":
 
             item_ids = list(candidates.keys())
             scores = list(candidates.values())
+            candidates_transformer = dict(zip(item_ids, scores))
             show_candidates(item_ids=item_ids, scores=scores, image_only=IMAGE_ONLY)
