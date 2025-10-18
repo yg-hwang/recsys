@@ -70,23 +70,3 @@ class DatasetPath:
         아이템 텍스트 벡터 저장 경로 (parquet)
         """
         return self.dataset_path.joinpath("text_vectors.parquet")
-
-    # -----------------------------------------------
-    # 유틸 함수
-    # -----------------------------------------------
-    def get_path(self, file_name: str) -> Path:
-        """
-        데이터셋 폴더 내 임의 파일의 경로를 반환
-        """
-        return self.dataset_path.joinpath(file_name)
-
-    def create_path(self, file_name: str) -> Path:
-        """
-        주어진 파일명을 포함한 경로를 생성하고 반환
-        - 중간 디렉토리가 없으면 자동 생성
-        - 실제 저장 시 안전하게 경로 확보 가능
-        """
-        path = self.get_path(file_name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        return path
