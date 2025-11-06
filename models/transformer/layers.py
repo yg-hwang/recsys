@@ -104,14 +104,14 @@ class LearnablePositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        :param x: 입력 텐서 (seq_len, batch_size, embedding_dim)
-        :return: 위치 인코딩이 더해진 텐서 (seq_len, batch_size, embedding_dim)
+        :param x: 입력 텐서 (batch_size, seq_len, embedding_dim)
+        :return: 위치 인코딩이 더해진 텐서 (batch_size, seq_len, embedding_dim)
         """
-        seq_len, batch_size, embedding_dim = x.size()
+        batch_size, seq_len, embedding_dim = x.size()
 
         # 각 위치 인덱스 생성: [0, 1, 2, ..., seq_len-1]
-        positions = torch.arange(seq_len, device=x.device).unsqueeze(1)
-        # 위치 embedding lookup 후 broadcast (seq_len, embedding_dim)
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+        # 위치 embedding lookup 후 broadcast (1, seq_len, embedding_dim)
         pe = self.pos_embedding(positions)
 
         # 입력 x에 더하고 dropout

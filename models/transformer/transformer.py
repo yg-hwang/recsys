@@ -57,7 +57,7 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         # Positional Encoding + Transformer Encoder Layer
         # -----------------------------------------------
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads, batch_first=True)
 
         # 위치 정보를 넣기 위한 Positional Encoding
         self.position_encoding = LearnablePositionalEncoding(
@@ -89,49 +89,46 @@ class SimpleTransformer(nn.Module):
     def _apply_pooling(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         Transformer 출력 시퀀스를 하나의 벡터로 요약
-        입력: (seq_len, batch_size, embedding_dim)
+        입력: (batch_size, seq_len, embedding_dim)
         출력: (batch_size, embedding_dim)
         """
 
-        # mask 형태 변환: (seq_len, batch_size, 1)
+        # mask 형태 변환: (batch_size, seq_len, 1)
         # valid 위치: 1, pad 위치: 0
-        valid_mask = (1 - mask.float()).T.unsqueeze(-1)
+        valid_mask = (1 - mask.float()).unsqueeze(-1)
 
         # 패딩 토큰 무시 (mask가 0인 위치는 곱하면 0됨)
         masked_x = x * valid_mask
 
         # pooling 방식별 처리
-        match self.global_pool:
-            case "last":
-                # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch,)
-                valid_lengths = valid_mask.sum(dim=0).squeeze(-1)
-                # 음수 방지
-                last_indices = (valid_lengths - 1).clamp(min=0).long()
-                batch_indices = torch.arange(x.size(1), device=x.device)
-                # (batch_size, embedding_dim)
-                return masked_x[last_indices, batch_indices]
+        if self.global_pool == "last":
+            # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch,)
+            valid_lengths = valid_mask.sum(dim=1).squeeze(-1)
+            # 음수 방지
+            last_indices = (valid_lengths - 1).clamp(min=0).long()
+            batch_indices = torch.arange(x.size(0), device=x.device)
+            # (batch_size, embedding_dim)
+            return masked_x[batch_indices, last_indices]
 
-            case "avg":
-                # 유효 토큰만 평균
-                sum_x = masked_x.sum(dim=0)
-                # 각 배치의 유효 토큰 수 (batch, 1)
-                denom = valid_mask.sum(dim=0).clamp(min=1.0)
-                return sum_x / denom
+        elif self.global_pool == "avg":
+            # 유효 토큰만 평균
+            sum_x = masked_x.sum(dim=1)
+            # 각 배치의 유효 토큰 수 (batch, 1)
+            denom = valid_mask.sum(dim=1).clamp(min=1.0)
+            return sum_x / denom
 
-            case "sum":
-                # 유효 토큰만 합산
-                return masked_x.sum(dim=0)
+        elif self.global_pool == "sum":
+            # 유효 토큰만 합산
+            return masked_x.sum(dim=1)
 
-            case "max":
-                # 유효 토큰이 없는 위치는 -inf로 채움
-                masked_x = masked_x.masked_fill(valid_mask == 0, float("-inf"))
-                x, _ = masked_x.max(dim=0)
-                return x
+        elif self.global_pool == "max":
+            # 유효 토큰이 없는 위치는 -inf로 채움
+            masked_x = masked_x.masked_fill(valid_mask == 0, float("-inf"))
+            x, _ = masked_x.max(dim=1)
+            return x
 
-            case _:
-                raise ValueError(
-                    "`global_pool` must be 'last', 'avg', 'max', or 'sum'."
-                )
+        else:
+            raise ValueError("`global_pool` must be 'last', 'avg', 'max', or 'sum'.")
 
     def forward(
         self,
@@ -182,10 +179,8 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         #  Transformer 입력 변환
         # -----------------------------------------------
-        # Transformer는 (seq_len, batch_size, embedding_dim) 입력을 기대
-        x_embed = x_embed.permute(1, 0, 2)
-
-        # Positional Encoding 추가
+        # batch_first=True이므로 permute 불필요
+        # (batch_size, seq_len, embedding_dim)
         x_embed = self.position_encoding(x_embed)
 
         # Transformer Encoder 적용
@@ -197,7 +192,7 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         y_outputs = {}
         for target_name, tower in self.towers.items():
-            # (seq_len, batch_size, embedding_dim) -> Linear -> (seq_len, batch_size, n_classes)
+            # (batch_size, seq_len, embedding_dim) -> Linear -> (seq_len, batch_size, n_classes)
             y_outputs[target_name] = tower(x_embed)
 
         # -----------------------------------------------

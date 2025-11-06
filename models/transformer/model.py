@@ -58,8 +58,6 @@ class Model:
         # -----------------------------------------------
         # Model: Regressor
         # -----------------------------------------------
-        model = "regressor"
-
         # projection 모델 설정(config) 로드
         f = open(self.reg_model_dir.joinpath("checkpoint/model_config.json"))
         self.reg_model_config = json.load(f)
@@ -204,7 +202,7 @@ class Model:
                 y_pred = y_preds[target]
 
                 # logits_flat: (seq_len * batch_size, n_classes)
-                logits_flat = y_pred.permute(1, 0, 2).reshape(-1, dim)
+                logits_flat = y_pred.reshape(-1, dim)
 
                 # Softmax 확률 계산 (seq_len * batch_size, n_classes)
                 probs_flat = torch.softmax(logits_flat, dim=-1)

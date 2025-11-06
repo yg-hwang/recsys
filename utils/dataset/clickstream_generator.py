@@ -35,7 +35,7 @@ class ClickstreamGenerator:
         self.n_sessions = n_sessions_per_user
         self.start_date = start_date
 
-        # item_id -> 아이템 속성 row 매핑
+        # `item_id` -> 아이템 속성 row 매핑
         self.item_metadata_dict = {
             row["item_id"]: row for _, row in df_item_metadata.iterrows()
         }
@@ -55,6 +55,7 @@ class ClickstreamGenerator:
         - `similarity_keys` 컬럼 값이 동일한 아이템들을 필터링
         - 캐싱을 활용해 반복 계산 방지
         """
+
         key = tuple(anchor_row[k] for k in self.similarity_keys)
         if key in self.similarity_cache:
             return self.similarity_cache[key]
@@ -65,6 +66,7 @@ class ClickstreamGenerator:
 
         similar_items = df_filtered["item_id"].tolist()
         self.similarity_cache[key] = similar_items
+
         return similar_items
 
     def simulate_user_sessions(self, user_id: str) -> List[Dict]:
@@ -74,6 +76,7 @@ class ClickstreamGenerator:
         - 각 아이템에 대해 `action`, `timestamp` 부여
         - user metadata, item metadata 병합
         """
+
         session_rows = []
         for _ in range(self.n_sessions):
 
@@ -92,7 +95,7 @@ class ClickstreamGenerator:
             anchor_row = self.df_item_metadata.sample(1).iloc[0]
 
             # -----------------------------------------------
-            # anchor 아이템과 유사한 아이템 추출
+            # anchor 아이템과 유사한 아이템 추출 (유저 성별 기준 필터링)
             # -----------------------------------------------
             similar_items = self.get_similar_items(anchor_row)
             if not similar_items:
@@ -128,6 +131,7 @@ class ClickstreamGenerator:
                     **item_row.drop(labels=["item_id"]).to_dict(),
                 }
                 session_rows.append(row)
+
         return session_rows
 
 
