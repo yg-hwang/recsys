@@ -220,12 +220,17 @@ class Model:
                 # label class 복원
                 y_pred_labels = self.encoder[target].inverse_transform(y_pred_ids)
 
-                # label class별 확률 평균
+                # Mask 정보 가져오기 (batch_size, seq_len) -> flatten
+                masks_flat = data["inputs"]["masks"].reshape(-1).cpu().numpy()
+
+                # Label class별 확률 평균 (마스크 고려)
                 label_probs: Dict[str, List[float]] = {}
-                for label, prob in zip(y_pred_labels, y_pred_probs):
-                    if label not in label_probs:
-                        label_probs[label] = []
-                    label_probs[label].append(prob)
+                for label, prob, mask in zip(y_pred_labels, y_pred_probs, masks_flat):
+                    # 패딩 위치(mask=1)는 제외
+                    if mask == 0:
+                        if label not in label_probs:
+                            label_probs[label] = []
+                        label_probs[label].append(float(prob))
 
                 # 평균값으로 단순화
                 # - 시퀀스 전체에서 어떤 속성이 얼마나 강하게 예측되는지를 feature별로 요약한 것
