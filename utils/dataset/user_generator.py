@@ -6,7 +6,7 @@ import pandas as pd
 def generate_users(
     num_users: int = 10000,
     age_range: Tuple[int, int] = (18, 70),
-    genders: Sequence[str] = ("M", "F"),
+    genders: Sequence[str] = ("Men", "Women"),
     gender_probs: Optional[Sequence[float]] = None,
     seed: Optional[int] = None,
     *,

@@ -49,6 +49,9 @@ class ClickstreamGenerator:
         # 동일 `anchor_row` 기준 유사 아이템 캐싱 (성능 최적화)
         self.similarity_cache = {}
 
+        # 사용자별 선호 앵커 풀 생성 (사전 계산)
+        self.user_anchor_pool = self._build_anchor_pools()
+
     def get_similar_items(self, anchor_row):
         """
         anchor 아이템과 유사한 아이템 목록 조회
@@ -69,13 +72,37 @@ class ClickstreamGenerator:
 
         return similar_items
 
+    def _build_anchor_pools(self, pool_size: int = 5) -> Dict[str, List]:
+        """
+        각 사용자마다 선호 앵커 아이템 풀을 생성
+        - 전체 아이템 중에서 무작위로 `pool_size`개를 선택
+        - 같은 사용자의 세션들은 이 풀 내에서만 앵커 선택
+        """
+
+        user_anchor_pool = {}
+
+        for user_id in self.user_attr_dict.keys():
+            # 이 사용자가 좋아할 만한 앵커 N개를 미리 선택
+            anchor_items = self.df_item_metadata.sample(
+                n=pool_size, random_state=hash(user_id) % (2**31)
+            )
+            user_anchor_pool[user_id] = anchor_items
+
+        return user_anchor_pool
+
     def simulate_user_sessions(self, user_id: str) -> List[Dict]:
         """
         특정 유저의 세션 로그 생성
+        - 사용자의 앵커 풀에서만 앵커 선택
         - `anchor` 아이템을 랜덤 선택 -> 유사 아이템 일부 탐색
         - 각 아이템에 대해 `action`, `timestamp` 부여
         - user metadata, item metadata 병합
         """
+
+        # -----------------------------------------------
+        # 해당 user_id의 속성 조회 (없으면 빈 dict)
+        # -----------------------------------------------
+        user_attrs = self.user_attr_dict.get(user_id, {})
 
         session_rows = []
         for _ in range(self.n_sessions):
@@ -90,28 +117,20 @@ class ClickstreamGenerator:
             )
 
             # -----------------------------------------------
-            # anchor 아이템 랜덤 선택
+            # 이 사용자의 앵커 풀에서만 선택
             # -----------------------------------------------
-            anchor_row = self.df_item_metadata.sample(1).iloc[0]
+            if user_id in self.user_anchor_pool:
+                anchor_row = self.user_anchor_pool[user_id].sample(1).iloc[0]
+            else:
+                anchor_row = self.df_item_metadata.sample(1).iloc[0]
 
-            # -----------------------------------------------
-            # anchor 아이템과 유사한 아이템 추출 (유저 성별 기준 필터링)
-            # -----------------------------------------------
             similar_items = self.get_similar_items(anchor_row)
             if not similar_items:
                 continue
 
-            # -----------------------------------------------
-            # 유저가 실제로 본 아이템 리스트 (3~6개 랜덤 선택)
-            # -----------------------------------------------
             viewed_items = random.sample(
                 similar_items, min(len(similar_items), random.randint(3, 6))
             )
-
-            # -----------------------------------------------
-            # 해당 user_id의 속성 조회 (없으면 빈 dict)
-            # -----------------------------------------------
-            user_attrs = self.user_attr_dict.get(user_id, {})
 
             # -----------------------------------------------
             # `viewed_items` 각각에 대해 로그 생성

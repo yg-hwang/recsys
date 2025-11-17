@@ -57,7 +57,9 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         # Positional Encoding + Transformer Encoder Layer
         # -----------------------------------------------
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=n_heads, batch_first=True)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim, nhead=n_heads, batch_first=True
+        )
 
         # 위치 정보를 넣기 위한 Positional Encoding
         self.position_encoding = LearnablePositionalEncoding(

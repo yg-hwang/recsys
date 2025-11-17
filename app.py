@@ -3,7 +3,6 @@ import requests
 import numpy as np
 import pandas as pd
 import streamlit as st
-import plotly.figure_factory as ff
 from pathlib import Path
 from typing import List, Tuple
 from pymilvus import Collection
