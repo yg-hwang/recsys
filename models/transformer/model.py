@@ -207,65 +207,83 @@ class Model:
                 # Softmax 확률 계산 (seq_len * batch_size, n_classes)
                 probs_flat = torch.softmax(logits_flat, dim=-1)
 
-                # argmax로 예측 label 인덱스 추출 (batch_size * seq_len)
-                y_pred_ids = logits_flat.argmax(dim=-1)
+                # Mask 정보 가져오기 (batch_size, seq_len) -> flatten (mask=0: 실제 값, mask=1: 패딩)
+                masks_flat = data["inputs"]["masks"].reshape(-1)
 
-                # 예측 label의 확률 값 추출
-                y_pred_probs = probs_flat[torch.arange(len(y_pred_ids)), y_pred_ids]
+                # 유효한 timestep만 선택 (mask == 0)
+                # 패딩 위치(mask=1)는 제외하기 위한 boolean mask 생성
+                valid_mask = masks_flat == 0
 
-                # numpy 변환
-                y_pred_ids = y_pred_ids.detach().cpu().numpy()
-                y_pred_probs = y_pred_probs.detach().cpu().numpy()
+                # 유효한 timestep들의 확률만 추출
+                y_probs_valid = probs_flat[valid_mask]
 
-                # label class 복원
-                y_pred_labels = self.encoder[target].inverse_transform(y_pred_ids)
+                # 클래스별 평균 확률 (n_classes,)
+                # 시퀀스 전체에서 각 클래스가 예측된 평균 확률
+                # - 어떤 속성이 얼마나 강하게 예측되는지를 feature별로 요약한 것
+                y_probs_mean = y_probs_valid.mean(dim=0).cpu().numpy()
 
-                # Mask 정보 가져오기 (batch_size, seq_len) -> flatten
-                masks_flat = data["inputs"]["masks"].reshape(-1).cpu().numpy()
+                # Label class 복원
+                # 클래스 인덱스를 원래 label 이름으로 변환
+                class_indices = np.arange(dim)
+                class_labels = self.encoder[target].inverse_transform(class_indices)
 
-                # Label class별 확률 평균 (마스크 고려)
-                label_probs: Dict[str, List[float]] = {}
-                for label, prob, mask in zip(y_pred_labels, y_pred_probs, masks_flat):
-                    # 패딩 위치(mask=1)는 제외
-                    if mask == 0:
-                        if label not in label_probs:
-                            label_probs[label] = []
-                        label_probs[label].append(float(prob))
-
-                # 평균값으로 단순화
-                # - 시퀀스 전체에서 어떤 속성이 얼마나 강하게 예측되는지를 feature별로 요약한 것
+                # -----------------------------------------------
+                # 예측 Label class 출력
+                # -----------------------------------------------
+                # 1) 평균 확률 threshold 이상인 class만 후보로 선택
+                # - threshold 이하의 노이즈성 예측값 제외
                 # - 현재 유저가 관심 가질 가능성이 높은 상품 속성을 pre-filter로 사용 가능
-                outputs[target] = {
-                    str(label): float(np.mean(probs))
-                    for label, probs in label_probs.items()
-                }
+                prob_threshold = 0.02
+                candidates = [
+                    (str(label), float(p))
+                    for label, p in zip(class_labels, y_probs_mean)
+                    if p >= prob_threshold
+                ]
+
+                # 2) 확률 내림차순 정렬
+                # - 가장 높은 확률을 가진 클래스부터 순서대로 정렬
+                candidates.sort(key=lambda x: x[1], reverse=True)
+
+                # 3) k-max로 상위 k개만 선택
+                # - 과도한 후보 개수를 제한하여 사용성 개선
+                k_max = 10
+                if len(candidates) > k_max:
+                    candidates = candidates[:k_max]
+
+                # 4) threshold가 너무 높아서 아무 것도 안 남은 경우 처리
+                # - 최소한 top-1 (가장 높은 확률의 클래스)은 보장
+                if not candidates:
+                    top_idx = int(y_probs_mean.argmax())
+                    candidates = [
+                        (str(class_labels[top_idx]), float(y_probs_mean[top_idx]))
+                    ]
+
+                # 최종 outputs
+                outputs[target] = {label: prob for label, prob in candidates}
                 # ---------- 예시 ---------- #
                 # {
                 #     "age_group": {
-                #         "Adults-Men": 0.9999998211860657,
-                #         "Adults-Women": 0.9999995827674866,
+                #         "Adults-Women": 0.5079721212387085,
+                #         "Adults-Men": 0.2920635938644409,
+                #         "Adults-Unisex": 0.1999642252922058
                 #     },
-                #     "article_type": {"Earrings": 0.9999967813491821, "Tshirts": 0.9999957084655762},
-                #     "base_color": {
-                #         "Green": 0.9999945163726807,
-                #         "Navy Blue": 1.0,
-                #         "Olive": 0.9999948740005493,
-                #         "Red": 0.9999958276748657,
-                #         "White": 1.0,
+                #     "article_type": {
+                #         "Flats": 0.38351359963417053,
+                #         "Tops": 0.2000497281551361,
+                #         "Shirts": 0.2000129222869873,
+                #         "Backpacks": 0.19999966025352478
                 #     },
-                #     "brand_name": {
-                #         "ADIDAS": 1.0,
-                #         "Adrika": 0.9999954700469971,
-                #         "Classic Polo": 0.9999713897705078,
-                #         "Lee": 0.9999972581863403,
-                #         "Royal Diadem": 0.9999864101409912,
+                #     ...
+                #     "usage": {
+                #         "Casual": 0.5993812680244446,
+                #         "Ethnic": 0.4000510573387146
                 #     },
-                #     "fit": {"<UNK>": 0.9999969601631165, "Regular Fit": 0.9999995231628418},
-                #     "gender": {"Men": 0.9999998211860657, "Women": 0.9999999403953552},
-                #     "master_category": {
-                #         "Accessories": 0.9999992251396179,
-                #         "Apparel": 0.9999993443489075,
-                #     },
+                #     "year": {
+                #         "2012": 0.6900452375411987,
+                #         "2015": 0.20011059939861298,
+                #         "2016": 0.10978426784276962
+                #     }
+                # }
 
             # -----------------------------------------------
             # 시퀀스 벡터 L2 정규화
