@@ -44,7 +44,7 @@ class Model:
         )
         self.seq_model = self.seq_model.to(self.device)
 
-        # 패딩 토큰 값 ('-1'을 인코딩 했기 때문에 보통 0임)
+        # 패딩 토큰 값 ('-999'을 인코딩 했기 때문에 보통 0임)
         self.padding_value = padding_value
 
         # feature별 LabelEncoder 로드
