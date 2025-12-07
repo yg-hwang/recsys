@@ -12,7 +12,7 @@ class FeatureLabelEncoder(LabelEncoder):
     """
     범주형 컬럼을 연속형 정수로 인코딩하기 위한 기능
 
-    - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용 (특수 토큰 '-1', '<UNK>'를 강제로 포함)
+    - 각 컬럼마다 개별 LabelEncoder를 만들어 보관 및 재사용
     - `fit()`: 컬럼별 고유값으로 인코더 학습
     - `transform()`: 학습된 인코더로 각 컬럼을 정수로 치환 (in-place 할당)
     - `inverse_transform()`: 정수 -> 원래 label로 복원
@@ -22,12 +22,12 @@ class FeatureLabelEncoder(LabelEncoder):
         super().__init__()
         self._all_classes = {}  # 컬럼별 고유 label class 저장
         self._all_encoders = {}  # 컬럼별 LabelEncoder 객체 저장
-        self.special_tokens = ["-1", "<UNK>"]
+        self.special_tokens = ["-999", "<UNK>"]  # 특수 토큰
 
     def fit(self, df: pd.DataFrame):
         """
         전달된 DataFrame의 모든 컬럼에 대해 LabelEncoder를 생성
-        - '-1', '<UNK>' 토큰을 반드시 포함
+        - '-999', '<UNK>' 토큰을 반드시 포함 ('-999': Masking Value, 'UNK': Unseen Value)
         """
 
         for column in sorted(df.columns):
