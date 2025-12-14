@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 from typing import List, Dict, Tuple, Union, Literal
 
-from .layers import EmbeddingWithNorm, LearnablePositionalEncoding
+from .layers import EmbeddingLayer, LearnablePositionalEncoding
 
 
 class SimpleTransformer(nn.Module):
     """
-    TransformerEncoder 기반 Sequential Recommendation (Baseline)
-    - 여러 feature sequence를 임베딩하여 Transformer로 학습
+    Shared TransformerEncoder 기반 Multi-task Classification (Baseline)
+    - 여러 feature sequence를 임베딩하여 Transformer로 학습 (behavior sequence transformer과 유사)
     - 마지막에 pooling 후, task별 예측 head(tower)를 통해 결과 출력
     """
 
@@ -49,7 +49,7 @@ class SimpleTransformer(nn.Module):
         # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
         self.embeddings = nn.ModuleDict(
             {
-                name: EmbeddingWithNorm(n_classes, embedding_dim)
+                name: EmbeddingLayer(n_classes, embedding_dim)
                 for name, n_classes in feature_dims.items()
             }
         )
@@ -87,6 +87,18 @@ class SimpleTransformer(nn.Module):
         # Action Weight 설정
         # -----------------------------------------------
         self.action_weights = action_weights or {}
+
+        # -----------------------------------------------
+        # Causal Attention Mask 준비 (look-ahead 차단)
+        # -----------------------------------------------
+        # (seq_len, seq_len)
+        # True  = attention 차단 (미래를 못 봄)
+        # False = attention 허용
+        causal_mask = torch.triu(
+            torch.ones(seq_len, seq_len, dtype=torch.bool),
+            diagonal=1,
+        )
+        self.register_buffer("causal_attn_mask", causal_mask)
 
     def _apply_pooling(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
@@ -144,6 +156,8 @@ class SimpleTransformer(nn.Module):
         2) feature 임베딩 합산 (같은 길이 시퀀스로 통합)
         3) Positional Encoding 추가
         4) TransformerEncoder 적용 (self-attention)
+           - src_key_padding_mask: padding 무시
+           - causal mask: 미래 토큰 차단
         5) pooling -> user representation
         6) task tower를 통해 각 task 예측
 
@@ -152,6 +166,9 @@ class SimpleTransformer(nn.Module):
         :param masks: padding mask (batch_size, seq_len)
         :return: (sequence vector, {target_name: 예측 로짓})
         """
+
+        if masks.dtype != torch.bool:
+            masks = masks.to(torch.bool)
 
         # -----------------------------------------------
         # Feature Embedding
@@ -166,6 +183,8 @@ class SimpleTransformer(nn.Module):
         # -----------------------------------------------
         # Action Weight 적용 (고정 가중치)
         # -----------------------------------------------
+        # action weight는 token embedding에 timestep별로 곱함
+        # padding 위치는 왜곡 방지를 위해 weight=1.0으로 고정
         if action_sequence is not None and self.action_weights:
             # 행동 ID -> 가중치 값 매핑용 룩업 벡터 생성
             action_indices = [int(k) for k in self.action_weights.keys()]
@@ -176,6 +195,10 @@ class SimpleTransformer(nn.Module):
 
             # (batch, seq_len) -> (batch, seq_len, 1) broadcasting 곱
             weights = lookup[action_sequence.long()].unsqueeze(-1)
+
+            # padding 위치는 weight=1.0 고정
+            weights = weights.masked_fill(masks.unsqueeze(-1), 1.0)
+
             x_embed = x_embed * weights
 
         # -----------------------------------------------
@@ -187,7 +210,11 @@ class SimpleTransformer(nn.Module):
 
         # Transformer Encoder 적용
         # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
-        x_embed = self.transformer(x_embed, src_key_padding_mask=masks)
+        # causal_attn_mask: 미래 토큰 차단 (seq_len, seq_len)
+        causal_attn_mask = self.causal_attn_mask.to(device=x_embed.device)
+        x_embed = self.transformer(
+            x_embed, mask=causal_attn_mask, src_key_padding_mask=masks
+        )
 
         # -----------------------------------------------
         # Task별 예측 출력

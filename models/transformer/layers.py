@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
+from typing import List, Tuple, Dict, Union
 
 
-class EmbeddingWithNorm(nn.Module):
+class EmbeddingLayer(nn.Module):
     def __init__(self, num_embeddings: int, embedding_dim: int, dropout: float = 0.0):
         super().__init__()
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
@@ -118,3 +119,93 @@ class LearnablePositionalEncoding(nn.Module):
         x = x + pe
 
         return self.dropout(x)
+
+
+class AttentionPooling(nn.Module):
+    def __init__(self, hidden_dim: int = 64):
+        super().__init__()
+        self.attention_weights = nn.Linear(hidden_dim, 1)
+
+    def forward(
+        self, x: torch.Tensor, mask: Union[torch.Tensor, None] = None
+    ) -> torch.Tensor:
+        """
+        :param x: (batch_size, seq_len, hidden_dim)
+        :param mask: (batch_size, seq_len) True가 pad인 위치라면 해당 토큰 가중치를 0으로 만드는 방식
+        """
+
+        # Attention 가중치 계산
+        scores = self.attention_weights(x)
+
+        if mask is not None:
+            if mask.dtype != torch.bool:
+                mask = mask.to(torch.bool)
+
+            # all padding 시퀀스를 학습하는 경우는 없으므로, -inf가 들어가진 않을 것으로 기대
+            scores = scores.masked_fill(mask.unsqueeze(-1), float("-inf"))
+
+        # (batch_size, seq_len)
+        weights = torch.softmax(scores.squeeze(-1), dim=-1)
+
+        # (batch_size, embedding_dim)
+        user_vector = torch.sum(x * weights.unsqueeze(-1), dim=1)
+
+        return user_vector
+
+
+class FeatureWiseAttention(nn.Module):
+    def __init__(self, embedding_dim: int, num_features: int):
+        super(FeatureWiseAttention, self).__init__()
+        self.num_features = num_features
+        self.attention = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.ReLU(),
+            # 각 feature의 중요도를 스칼라로 출력
+            nn.Linear(embedding_dim // 2, 1),
+            # feature-wise 정규화
+            nn.Softmax(dim=1),
+        )
+
+    def forward(self, feature_embeds: Dict[str, torch.Tensor]) -> torch.Tensor:
+        # (batch_size, num_features, seq_len, embedding_dim)
+        x_concat = torch.stack(list(feature_embeds.values()), dim=1)
+
+        # Compute feature-wise attention scores (batch_size, num_features, 1)
+        attn_scores = self.attention(x_concat.mean(dim=2)).squeeze(-1)
+
+        # Reshape `attn_scores` to (batch_size, num_features, 1, 1) for broadcasting
+        attn_scores = attn_scores.unsqueeze(-1).unsqueeze(-1)
+
+        # Broadcasting을 통해 가중합 (batch_size, seq_len, embedding_dim)
+        weighted_features = (attn_scores * x_concat).sum(dim=1)
+
+        # (batch_size, seq_len, embedding_dim)
+        return weighted_features
+
+
+class MLP(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dims: Union[List[int], Tuple[int, int]],
+        output_dim: int = 1,
+        dropout: float = None,
+        output_layer: bool = True,
+    ):
+        super().__init__()
+        layers = list()
+        for embedding_dim in embedding_dims:
+            layers.append(torch.nn.Linear(input_dim, embedding_dim))
+            layers.append(torch.nn.BatchNorm1d(embedding_dim))
+            # layers.append(torch.nn.GELU())
+            layers.append(torch.nn.ReLU())
+            if dropout:
+                layers.append(torch.nn.Dropout(p=dropout))
+            input_dim = embedding_dim
+        if output_layer:
+            layers.append(torch.nn.Linear(input_dim, output_dim))
+
+        self.mlp = torch.nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp(x)
