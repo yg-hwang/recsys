@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Union, List
 
-from .transformer import SimpleTransformer
+from .transformer_v2 import MultiTaskMoESequenceTransformer
 from .regressor import MultiOutputRegressor
 
 
@@ -34,7 +34,7 @@ class Model:
         self.seq_model_config = json.load(f)
 
         # Transformer 모델 생성 및 가중치 로드
-        self.seq_model = SimpleTransformer(**self.seq_model_config)
+        self.seq_model = MultiTaskMoESequenceTransformer(**self.seq_model_config)
         self.seq_model.load_state_dict(
             torch.load(
                 f=self.seq_model_dir.joinpath("checkpoint/model.pt"),

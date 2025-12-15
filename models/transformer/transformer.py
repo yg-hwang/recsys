@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple, Union, Literal
 from .layers import EmbeddingLayer, LearnablePositionalEncoding
 
 
-class SimpleTransformer(nn.Module):
+class MultiTaskSequenceTransformer(nn.Module):
     """
     Shared TransformerEncoder 기반 Multi-task Classification (Baseline)
     - 여러 feature sequence를 임베딩하여 Transformer로 학습 (behavior sequence transformer과 유사)
@@ -24,17 +24,42 @@ class SimpleTransformer(nn.Module):
         global_pool: Literal["last", "avg", "max", "sum"] = "last",
     ):
         """
-        :param feature_dims: 입력 feature 이름과 feature별 클래스 개수
-        :param action_weights: 행동 가중치 (예: {0: 1.0, 1: 2.0, 2: 3.0, 3: 4.0})
-        :param embedding_dim: 각 feature를 임베딩할 차원 크기(Transformer Encoder 임베딩 차원과 동일)
-        :param seq_len: 시퀀스 길이
-        :param n_heads: Transformer multi-head attention 개수
-        :param n_layers: Transformer Encoder 레이어 수
-        :param output_dims: 츨략 Label 클래스 개수
-        :param global_pool: 임베딩 값 출력 Pooling 방식
+        :param feature_dims:
+            입력 feature 이름과 feature별 클래스 개수
+            예) {"color": 10, "price": 8, "category": 20, "action": 4}
+
+        :param action_weights:
+            행동 가중치
+            예) {0: 1.0, 1: 2.0, 2: 3.0, 3: 4.0}
+            - action_sequence가 주어질 경우 timestep별로 embedding에 곱해짐
+            - padding 위치에는 영향을 주지 않음
+
+        :param embedding_dim:
+            각 feature를 임베딩할 차원 크기 (Transformer Encoder 임베딩 차원과 동일)
+
+        :param seq_len:
+            입력 시퀀스 길이 (모델 내부에서 causal attention mask 생성에 사용)
+
+        :param n_heads:
+            Transformer multi-head attention 개수
+
+        :param n_layers:
+            Feature별 Transformer Encoder 레이어 수
+
+        :param output_dims:
+            출력 target label과 클래스 개수
+            예) {"color": 10, "price": 8, "category": 20}
+
+        :param global_pool:
+            시퀀스 임베딩을 하나의 feature vector 형태로 요약하는 pooling 방식
+            - "last": 마지막 유효 토큰
+            - "avg": 평균 pooling (padding 제외)
+            - "sum": 합 pooling (padding 제외)
+            - "max": max pooling (padding 제외)
+            - "att": attention pooling
         """
 
-        super(SimpleTransformer, self).__init__()
+        super(MultiTaskSequenceTransformer, self).__init__()
         # multi-task 학습을 위한 task 수 (output_dims에 정의된 label 수)
         self.n_tasks = len(output_dims)
 
@@ -55,19 +80,21 @@ class SimpleTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Positional Encoding + Transformer Encoder Layer
+        # Positional Encoding
+        # -----------------------------------------------
+        self.position_encoding = LearnablePositionalEncoding(
+            dim_model=embedding_dim, max_len=seq_len
+        )
+
+        # -----------------------------------------------
+        # Shared Transformer Encoder
         # -----------------------------------------------
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim, nhead=n_heads, batch_first=True
         )
 
-        # 위치 정보를 넣기 위한 Positional Encoding
-        self.position_encoding = LearnablePositionalEncoding(
-            dim_model=embedding_dim, max_len=seq_len
-        )
-
         # Transformer encoder
-        self.transformer = nn.TransformerEncoder(
+        self.shared_transformer_encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer, num_layers=n_layers
         )
 
@@ -84,7 +111,7 @@ class SimpleTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Action Weight 설정
+        # Action Weight Lookup (고정 가중치)
         # -----------------------------------------------
         self.action_weights = action_weights or {}
 
@@ -100,25 +127,19 @@ class SimpleTransformer(nn.Module):
         )
         self.register_buffer("causal_attn_mask", causal_mask)
 
-    def _apply_pooling(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def _apply_pooling(self, x: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
         """
         Transformer 출력 시퀀스를 하나의 벡터로 요약
         입력: (batch_size, seq_len, embedding_dim)
         출력: (batch_size, embedding_dim)
         """
 
-        # mask 형태 변환: (batch_size, seq_len, 1)
-        # valid 위치: 1, pad 위치: 0
-        valid_mask = (1 - mask.float()).unsqueeze(-1)
-
-        # 패딩 토큰 무시 (mask가 0인 위치는 곱하면 0됨)
-        masked_x = x * valid_mask
-
-        # pooling 방식별 처리
         if self.global_pool == "last":
             # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch,)
-            valid_lengths = valid_mask.sum(dim=1).squeeze(-1)
+            valid_mask = (~masks).unsqueeze(-1).float()
+            masked_x = x * valid_mask
             # 음수 방지
+            valid_lengths = valid_mask.sum(dim=1).squeeze(-1)
             last_indices = (valid_lengths - 1).clamp(min=0).long()
             batch_indices = torch.arange(x.size(0), device=x.device)
             # (batch_size, embedding_dim)
@@ -126,23 +147,27 @@ class SimpleTransformer(nn.Module):
 
         elif self.global_pool == "avg":
             # 유효 토큰만 평균
-            sum_x = masked_x.sum(dim=1)
-            # 각 배치의 유효 토큰 수 (batch, 1)
-            denom = valid_mask.sum(dim=1).clamp(min=1.0)
+            valid = (~masks).unsqueeze(-1)  # (batch_size, seq_len, 1)
+            sum_x = (x * valid).sum(dim=1)  # (batch_size, embedding_dim)
+            denom = valid.sum(dim=1).clamp(min=1)  # (batch_size, 1)
             return sum_x / denom
 
         elif self.global_pool == "sum":
             # 유효 토큰만 합산
-            return masked_x.sum(dim=1)
+            valid = (~masks).unsqueeze(-1)  # (batch_size, seq_len, 1)
+            return (x * valid).sum(dim=1)  # (batch_size, embedding_dim)
 
         elif self.global_pool == "max":
-            # 유효 토큰이 없는 위치는 -inf로 채움
-            masked_x = masked_x.masked_fill(valid_mask == 0, float("-inf"))
-            x, _ = masked_x.max(dim=1)
-            return x
+            x_masked = x.masked_fill(masks.unsqueeze(-1), float("-inf"))
+            return x_masked.max(dim=1).values  # (batch_size, embedding_dim)
+
+        elif self.global_pool == "att":
+            return self.attention_pooling(x, mask=masks)
 
         else:
-            raise ValueError("`global_pool` must be 'last', 'avg', 'max', or 'sum'.")
+            raise ValueError(
+                "`global_pool` must be 'last', 'avg', 'max', 'sum', or 'att'."
+            )
 
     def forward(
         self,
@@ -164,7 +189,9 @@ class SimpleTransformer(nn.Module):
         :param feature_sequences: {feature_name: 시퀀스 텐서}
         :param action_sequence: (선택) 행동 시퀀스 텐서
         :param masks: padding mask (batch_size, seq_len)
-        :return: (sequence vector, {target_name: 예측 로짓})
+        :return:
+          - sequence_vector: (batch_size, embedding_dim)
+          - y_outputs: {target_name: (batch_size, seq_len, n_classes)}
         """
 
         if masks.dtype != torch.bool:
@@ -212,7 +239,7 @@ class SimpleTransformer(nn.Module):
         # src_key_padding_mask: 패딩 위치 무시 (batch_size, seq_len)
         # causal_attn_mask: 미래 토큰 차단 (seq_len, seq_len)
         causal_attn_mask = self.causal_attn_mask.to(device=x_embed.device)
-        x_embed = self.transformer(
+        x_embed = self.shared_transformer_encoder(
             x_embed, mask=causal_attn_mask, src_key_padding_mask=masks
         )
 
