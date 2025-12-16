@@ -5,8 +5,12 @@
 # -----------------------------------------------
 # 1. Docker Compose 파일 다운로드
 # -----------------------------------------------
-echo ">>> Downloading Milvus Standalone docker-compose.yml ..."
-wget -q https://github.com/milvus-io/milvus/releases/download/v2.4.6/milvus-standalone-docker-compose.yml -O docker-compose.yml
+if [ ! -f "docker-compose.yml" ]; then
+  echo ">>> Downloading Milvus Standalone docker-compose.yml ..."
+  wget -q https://github.com/milvus-io/milvus/releases/download/v2.4.6/milvus-standalone-docker-compose.yml -O docker-compose.yml
+else
+  echo ">>> docker-compose.yml already exists. Skipping download..."
+fi
 
 # -----------------------------------------------
 # 2. 볼륨 디렉토리 생성
