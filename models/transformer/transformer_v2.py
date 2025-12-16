@@ -24,7 +24,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
     3) action weight 반영
         - `action_sequence`(클릭/찜/구매 등)와 `action_weights`가 주어지면,
           timestep별 가중치를 모든 feature token embedding에 곱해 행동 중요도를 반영
-
     """
 
     def __init__(
@@ -146,6 +145,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # # -----------------------------------------------
         # # Feature-wise Transformer Encoders
         # # -----------------------------------------------
+        # Feature별로 독립적인 트랜스포머 인코더를 사용하면 연산량이 폭증하여 미사용 (대신 Shared 인코더를 사용하도록 했음)
         # base_encoder_layer = nn.TransformerEncoderLayer(
         #     d_model=embedding_dim,
         #     nhead=n_heads,
@@ -180,6 +180,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # Shared Projection (feature concat -> shared_seq)
         # -----------------------------------------------
+        # Feature-wise 트랜스포머 인코더를 사용하지 않음에 따라 생략함
         # 입력: (batch_size, seq_len, embedding_dim * num_features)
         # 출력: (batch_size, seq_len, embedding_dim)
         # self.shared_proj = nn.Linear(embedding_dim * len(self.features), embedding_dim)
@@ -265,29 +266,34 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         if masks.dtype != torch.bool:
             masks = masks.to(torch.bool)
 
-        # lookup이 없으면 전부 1.0
-        if self.action_lookup is None:
+        # lookup이 없으면 전부 1.0 (원래 동작)
+        if not hasattr(self, "action_lookup") or self.action_lookup is None:
             return torch.ones(
                 (action_sequence.size(0), action_sequence.size(1), 1),
                 device=action_sequence.device,
                 dtype=dtype,
             )
 
-        # action id가 lookup 범위를 넘으면 안전하게 확장 (기본값 1.0)
+        # 로컬 복사본을 action_sequence와 같은 device로 맞춤
+        action_lookup = self.action_lookup
+        if action_lookup.device != action_sequence.device:
+            action_lookup = action_lookup.to(action_sequence.device)
+
+        # action id가 lookup 범위를 넘으면 로컬로 확장 (forward 내에서만)
         max_id_in_batch = int(action_sequence.max().item())
-        if max_id_in_batch >= self.action_lookup.size(0):
+        if max_id_in_batch >= action_lookup.size(0):
             new_lookup = torch.ones(
                 max_id_in_batch + 1,
-                device=self.action_lookup.device,
-                dtype=self.action_lookup.dtype,
+                device=action_sequence.device,
+                dtype=action_lookup.dtype,
             )
-            new_lookup[: self.action_lookup.size(0)] = self.action_lookup
-            self.action_lookup = new_lookup
+            new_lookup[: action_lookup.size(0)] = action_lookup.to(
+                action_sequence.device
+            )
+            action_lookup = new_lookup
 
         # weights: (batch_size, seq_len, 1)
-        weights = (
-            self.action_lookup[action_sequence.long()].to(dtype=dtype).unsqueeze(-1)
-        )
+        weights = action_lookup[action_sequence.long()].to(dtype=dtype).unsqueeze(-1)
 
         # padding 위치는 embedding 곱에서 왜곡 방지용으로 1.0 고정
         weights = weights.masked_fill(masks.unsqueeze(-1), 1.0)
@@ -428,12 +434,20 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         for feature_name in self.features:
             # token embedding: (batch_size, seq_len) -> (batch_size, seq_len, embedding_dim)
             f_embed = self.embeddings[feature_name](feature_sequences[feature_name])
-
-            # action weight 적용 (선택): (batch_size, seq_len, embedding_dim) * (batch_size, seq_len, 1)
-            if weights is not None:
-                f_embed = f_embed * weights.to(dtype=f_embed.dtype)
-
             x_embed = x_embed + f_embed
+
+        # -------------------------------------------
+        # Action Embedding 추가 (`feature_sequences`에 action이 있으면 합산)
+        # -------------------------------------------
+        if "action" in feature_sequences and "action" in self.embeddings:
+            action_embed = self.embeddings["action"](feature_sequences["action"])
+            x_embed = x_embed + action_embed
+
+        # -------------------------------------------
+        # Action Weight 적용 (합산된 임베딩에 곱셈)
+        # -------------------------------------------
+        if weights is not None:
+            x_embed = x_embed * weights.to(dtype=x_embed.dtype)
 
         # positional encoding: (batch_size, seq_len, embedding_dim)
         x_embed = self.position_encoding(x_embed)
@@ -477,23 +491,44 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         y_outputs: Dict[str, torch.Tensor] = {}
 
         for target_name in self.targets:
-            # gate logits
+            # 각 timestep마다 서로 다른 expert 조합 선택을 위해 timestep-wise 계산을 할 수도 있으나,
+            # pooling 된 벡터를 사용하여 연산을 줄이고 시퀀스 맥락을 일반화하는 걸 의도함.
+            # gate_logits = self.gates[target_name](shared_seq)  # (B, S, n_experts)
+            # gate_weights = torch.softmax(gate_logits, dim=-1)  # (B, S, n_experts)
+
+            # gate logits (`shared_seq` 말고 Pooling Vector로 계산)
             # 입력: (batch_size, embedding_dim)
             # 출력: (batch_size, n_experts)
             gate_logits = self.gates[target_name](sequence_vector)
             gate_weights = torch.softmax(gate_logits, dim=-1)
 
             # ---------------------------------------
-            # fused sequence = Σ_k gate_k * expert_k
+            # fused sequence = Σ_k gate_{t,k} * expert_k(t)
+            # - 여러 expert들의 출력을 가중치로 합치는 단계
+            # 1) gate_weights: 각 expert의 중요도를 나타내는 확률값
+            #    - 예: [Expert_1: 0.6, Expert_2: 0.2, Expert_3: 0.1, Expert_4: 0.1]
+            #    - 합이 1.0이 되는 확률 분포 (softmax 적용됨)
+            #
+            # 2) expert_stack: 4개 expert가 각각 생성한 변환된 시퀀스들
+            #    - (batch_size, seq_len, 4개_expert, embedding_dim)
+            #    - 각 expert마다 다른 방식으로 시퀀스를 변환함
+            #
+            # 3) Weighted Sum (가중 합산):
+            #    - 각 expert의 출력에 gate_weights를 곱하고 모두 더함
+            #    - 결과: 가장 중요한 expert들의 출력이 최종 시퀀스에 더 많이 반영됨
+            #    - 예: 0.6*Expert_1_output + 0.2*Expert_2_output + 0.1*Expert_3_output + ...
+            #
+            # [효과]
+            # - 각 task별로 필요한 전문성(expertise)을 동적으로 조합
+            # - 비효율적인 expert는 가중치가 작아짐
+            # - 학습 과정에서 자동으로 각 expert의 역할이 결정됨
             # ---------------------------------------
             # expert_stack: (batch_size, seq_len, n_experts, embedding_dim)
-            # gate_weights: (batch_size, n_experts)
-            #
-            # gate_weights를 broadcasting 가능한 shape으로 확장
-            # (batch_size, n_experts) -> (batch_size, 1, n_experts, 1)
+            # gate_weights: (batch_size, seq_len, n_experts)
+            # gate_weights를 mixing용으로 확장
+            # (batch_size, seq_len, n_experts) -> (batch_size, seq_len, n_experts, 1)
             gate_expand = gate_weights.unsqueeze(1).unsqueeze(-1)
 
-            # (batch_size, seq_len, n_experts, embedding_dim) -> sum over experts
             # fused_seq: (batch_size, seq_len, embedding_dim)
             fused_seq = (expert_stack * gate_expand).sum(dim=2)
 

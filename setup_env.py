@@ -41,7 +41,10 @@ def setup_path(target_root: str = "recsys", verbose: bool = False) -> Path:
 
 
 def setup_font(
-    root_dir: Path, font_path: str = "assets/NanumGothic-Bold.ttf", size: int = 12
+    root_dir: Path,
+    font_path: str = "assets/NanumGothic-Bold.ttf",
+    size: int = 12,
+    verbose: bool = True,
 ) -> None:
     """
     Matplotlib 시각화를 위한 한글 폰트 설정
@@ -49,21 +52,36 @@ def setup_font(
     :param root_dir: 프로젝트 루트 경로 (`setup_path()` 반환값)
     :param font_path: 폰트 경로
     :param size: 기본 폰트 크기
+    :param verbose: 폰트 적용 경로 출력 (선택)
     """
-    font_path = root_dir.joinpath(font_path)
-
-    if not font_path.exists():
-        print(f"[ERROR] Font file not found: {font_path}")
+    font_file = root_dir.joinpath(font_path)
+    if not font_file.exists():
+        print(f"[ERROR] Font not found: {font_file}")
         return
 
-    font_name = font_manager.FontProperties(fname=font_path).get_name()
+    # 1) 명시적으로 matplotlib에 폰트 파일 등록
+    font_manager.fontManager.addfont(str(font_file))
 
-    # matplotlib 전역 폰트 설정
-    rcParams["font.family"] = font_name
+    # 2) 내부 이름 읽기
+    prop = font_manager.FontProperties(fname=str(font_file))
+    font_name = prop.get_name()
+
+    # 3) 폰트 목록에 반영되었는지 확인, 필요시 재빌드
+    if font_name not in {f.name for f in font_manager.fontManager.ttflist}:
+        try:
+            font_manager._rebuild()
+        except Exception as e:
+            if verbose:
+                print("[INFO] rebuild warning:", e)
+
+    # 4) rcParams에 안전하게 적용
+    rcParams["font.family"] = "sans-serif"
+    current_sans = list(rcParams.get("font.sans-serif", []))
+    rcParams["font.sans-serif"] = [font_name] + [
+        s for s in current_sans if s != font_name
+    ]
     rcParams["font.size"] = size
-    rcParams["axes.unicode_minus"] = False  # 음수 기호 깨짐 방지
-
-    print(f"[INFO] Font applied: {font_name}")
+    rcParams["axes.unicode_minus"] = False
 
 
 def setup_env() -> Path:
