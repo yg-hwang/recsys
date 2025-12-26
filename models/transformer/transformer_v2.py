@@ -5,17 +5,68 @@ from typing import Dict, Tuple, Optional, Literal, Union
 from .layers import EmbeddingLayer, AttentionPooling, LearnablePositionalEncoding, MLP
 
 
+class TransformerExpert(nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        nhead: int = 1,
+        num_layers: int = 1,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        # -------------------------------------------------
+        # Expert 내부는 TransformerEncoder로 구성
+        # - shared_seq(batch_size, seqq_len, embedding_dim)를 입력으로 받아
+        # - expert별로 서로 다른 변환을 수행한 출력(batch_size, seqq_len, embedding_dim)을 만듦
+        # -------------------------------------------------
+        layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=nhead,
+            dim_feedforward=4 * embedding_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,  # 깊어져도 학습 안정성에 유리
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
+
+        # -------------------------------------------------
+        # residual + layer norm을 명시적으로 한 번 더 적용
+        # - encoder 내부에도 residual이 있지만, 여기서는 expert 전체를 하나의 블록으로 보고
+        #   "입력 x + expert_out" 형태로 안정적인 업데이트를 보장
+        # -------------------------------------------------
+        self.ln = nn.LayerNorm(embedding_dim)
+
+    def forward(
+        self, x: torch.Tensor, src_key_padding_mask=None, attn_mask=None
+    ) -> torch.Tensor:
+        # -------------------------------------------------
+        # Expert TransformerEncoder
+        # - mask=attn_mask: future token을 보지 못하도록 causal 차단
+        # - src_key_padding_mask: padding token은 attention에서 무시
+        # -------------------------------------------------
+
+        # x: (batch_size, seq_len, embedding_dim)
+        out = self.encoder(x, mask=attn_mask, src_key_padding_mask=src_key_padding_mask)
+
+        # -------------------------------------------------
+        # residual + layer norm
+        # - Expert 변환(out)을 입력(x)에 더해 업데이트하고
+        # - LayerNorm으로 스케일을 안정화
+        # -------------------------------------------------
+        return self.ln(x + out)
+
+
 class MultiTaskMoESequenceTransformer(nn.Module):
     """
     MoSE 기반 Multi-task Classification (MoSE 논문 응용 버전)
     - 여러 feature sequence를 입력으로 받아, 각 feature별 "다음 시퀀스"를 예측
-    - pooling 결과 sequence_vector을 user vector로 사용
+    - pooling된 `sequence_vector`을 user vector로 사용
 
     응용 포인트
     ----------
-    1) tower 제거
-       - task별 추가 tower를 제거하고, `fused_seq` -> output head로 바로 logits 생성
-
+    1) LSTM 대신 TransformerEncoder로 변경
     2) expert를 MLP로 변경
        - Transformer expert 대신 position-wise MLP expert 적용
        - 시간축(seq_len) mixing은 feature encoder 단계(Transformer)에서만 발생하고,
@@ -36,10 +87,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         n_layers: int = 2,
         output_dims: Dict[str, int] = None,
         global_pool: Literal["last", "avg", "max", "sum", "att"] = "last",
-        # ---------- MoSE 관련 하이퍼파라미터 ---------- #
+        # ---------- MoE 관련 하이퍼파라미터 ---------- #
         n_experts: int = 4,
-        expert_layers: int = 1,
         dropout: float = 0.0,
+        expert_layers: int = 1,  # will be used as TransformerExpert num_layers
+        expert_nhead: int = 1,
+        top_k: int = 2,  # top-k for gating sparsity
     ):
         """
         :param feature_dims:
@@ -62,7 +115,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             Transformer multi-head attention 개수
 
         :param n_layers:
-            Feature별 Transformer Encoder 레이어 수
+            Shared Transformer Encoder 레이어 수
 
         :param output_dims:
             출력 target label과 클래스 개수
@@ -70,21 +123,19 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         :param global_pool:
             시퀀스 임베딩을 하나의 feature vector 형태로 요약하는 pooling 방식
-            - "last": 마지막 유효 토큰
-            - "avg": 평균 pooling (padding 제외)
-            - "sum": 합 pooling (padding 제외)
-            - "max": max pooling (padding 제외)
-            - "att": attention pooling
 
         :param n_experts:
-            MoSE 구조에서 사용할 expert 개수
+            MoE 구조에서 사용할 expert 개수
 
         :param expert_layers:
-            MLP expert의 hidden layer 개수로 사용
-            - 예: expert_layers=2 이면 [2 * embedding_dim, 2 * embedding_dim] 형태의 hidden 구성
+            각 TransformerExpert의 num_layers로 사용
 
-        :param dropout:
-            Transformer 내부 dropout 비율
+        :param expert_nhead:
+            각 TransformerExpert의 head 수 (가볍게 1~2 head로 두는 편이 비용이 적음)
+
+        :param top_k:
+            gating에서 상위 k개의 expert만 사용하도록 강제하는 sparsity 옵션
+            - k가 작을수록 계산을 줄이고 분업을 강제
         """
 
         super().__init__()
@@ -95,13 +146,28 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         self.seq_len = seq_len
         self.embedding_dim = embedding_dim
         self.global_pool = global_pool
+        self.expert_nhead = expert_nhead
         self.n_experts = n_experts
+
+        # top_k는 n_experts보다 클 수 없으므로 안전 처리
+        self.top_k = min(top_k, n_experts)
+
+        # expert layer는 최소 1을 보장
+        self.expert_num_layers = max(1, int(expert_layers))
+
+        # -------------------------------------------------
+        # gate temperature (학습 가능)
+        # - softmax(logits / temperature)
+        # - temperature ↓ : 특정 expert에 몰아주는 routing (샤프)
+        # - temperature ↑ : 더 고르게 섞는 routing (소프트)
+        # -------------------------------------------------
+        self.gate_temperature = nn.Parameter(torch.tensor(1.0))
 
         # -----------------------------------------------
         # 입력 feature 구성
+        # - feature_dims에 "action"이 있어도 token embedding feature에서는 제외
+        # - action은 별도 `action_sequence`로 처리
         # -----------------------------------------------
-        # feature_dims에 "action"이 있어도 token embedding feature에서는 제외
-        # action은 별도 `action_sequence`로 처리
         self.features = [k for k in feature_dims.keys() if k != "action"]
 
         # task(target) 이름은 `output_dims`의 key를 그대로 사용
@@ -109,11 +175,9 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Feature Embedding Layer
+        # - 입력: (batch_size, seq_len)
+        # - 출력: (batch_size, seq_len, embedding_dim)
         # -----------------------------------------------
-        # feature마다 별도의 Embedding 생성
-        # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
-        # 입력: (batch_size, seq_len)
-        # 출력: (batch_size, seq_len, embedding_dim)
         self.embeddings = nn.ModuleDict(
             {
                 name: EmbeddingLayer(int(n_classes), embedding_dim)
@@ -123,6 +187,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Action Weight Lookup (고정 가중치)
+        # - action_sequence: (batch_size, seq_len) 형태로 들어오고,
+        #   각 timestep의 action id -> weight로 매핑해서 (batch_size, seq_len, 1) weight tensor를 생성
         # -----------------------------------------------
         self.action_weights = action_weights or {}
         if self.action_weights:
@@ -142,29 +208,10 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             dim_model=embedding_dim, max_len=seq_len
         )
 
-        # # -----------------------------------------------
-        # # Feature-wise Transformer Encoders
-        # # -----------------------------------------------
-        # Feature별로 독립적인 트랜스포머 인코더를 사용하면 연산량이 폭증하여 미사용 (대신 Shared 인코더를 사용하도록 했음)
-        # base_encoder_layer = nn.TransformerEncoderLayer(
-        #     d_model=embedding_dim,
-        #     nhead=n_heads,
-        #     batch_first=True,
-        #     dropout=dropout,
-        # )
-        #
-        # self.feature_encoders = nn.ModuleDict(
-        #     {
-        #         feature_name: nn.TransformerEncoder(
-        #             encoder_layer=base_encoder_layer,
-        #             num_layers=n_layers,
-        #         )
-        #         for feature_name in self.features
-        #     }
-        # )
-
         # -----------------------------------------------
         # Shared Transformer Encoder
+        # - 모든 feature를 합친 `x_embed`를 한 번에 인코딩
+        # - behavior sequence transformer처럼 공유된 sequence representation을 생성
         # -----------------------------------------------
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
@@ -178,32 +225,18 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Shared Projection (feature concat -> shared_seq)
+        # Experts (Transformer-based)
+        # - expert 입력: `shared_seq` (batch_size, seq_len, embedding_dim)
+        # - expert 출력: `expert_out` (batch_size, seq_len, embedding_dim)
+        # - expert_stack: (batch_size, seq_len, n_experts, embedding_dim) 로 쌓아서 gating으로 mixture 생성
         # -----------------------------------------------
-        # Feature-wise 트랜스포머 인코더를 사용하지 않음에 따라 생략함
-        # 입력: (batch_size, seq_len, embedding_dim * num_features)
-        # 출력: (batch_size, seq_len, embedding_dim)
-        # self.shared_proj = nn.Linear(embedding_dim * len(self.features), embedding_dim)
-
-        # -----------------------------------------------
-        # Experts (MoE)
-        # -----------------------------------------------
-        # Transformer 대신 position-wise MLP 로 사용 (연산량 감소를 위해)
-        # 입력: (batch_size * seq_len, embedding_dim)
-        # 출력: (batch_size * seq_len, embedding_dim)
-        # hidden dims 구성:
-        # - expert_layers=1 -> [2 * embedding_dim]
-        # - expert_layers=2 -> [2 * embedding_dim, 2 * embedding_dim]
-        hidden_dim = 2 * embedding_dim
-        expert_hidden_dims = [hidden_dim for _ in range(max(1, int(expert_layers)))]
         self.experts = nn.ModuleList(
             [
-                MLP(
-                    input_dim=embedding_dim,
-                    embedding_dims=expert_hidden_dims,
-                    output_dim=embedding_dim,
-                    dropout=dropout if dropout > 0 else None,
-                    output_layer=True,
+                TransformerExpert(
+                    embedding_dim=embedding_dim,
+                    nhead=self.expert_nhead,
+                    num_layers=self.expert_num_layers,
+                    dropout=dropout,
                 )
                 for _ in range(n_experts)
             ]
@@ -211,10 +244,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Task-wise Gates
+        # - gate 입력은 `shared_seq`를 사용 (timestep-wise)
+        # - gate(shared_seq[t]) -> 각 timestep마다 expert mixture 비율이 달라질 수 있음
+        # - 유저가 지금 보는 아이템이 어떤 성격인지에 따라 expert를 다르게 쓰게 하는 의도
+        # - 입력: (batch_size, embedding_dim)
+        # - 출력: (batch_size, n_experts)
         # -----------------------------------------------
-        # gate 입력은 `sequence_vector`(Pooling된 벡터)만 사용
-        # 입력: (batch_size, embedding_dim)
-        # 출력: (batch_size, n_experts)
         self.gates = nn.ModuleDict(
             {
                 target_name: nn.Linear(embedding_dim, n_experts)
@@ -223,16 +258,48 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         )
 
         # -----------------------------------------------
-        # Output Heads
+        # Task-specific Towers (adapter + shallow head)
+        # - tower를 큰 Transformer로 두지 않고,
+        #   adapter: (E -> r -> E) residual 미세조정
+        #   head: layernorm + MLP로 logits 생성
         # -----------------------------------------------
-        # 입력: (batch_size, seq_len, embedding_dim)
-        # 출력: (batch_size, seq_len, n_classes)
-        self.output_heads = nn.ModuleDict(
-            {
-                target_name: nn.Linear(embedding_dim, int(n_classes))
-                for target_name, n_classes in output_dims.items()
-            }
-        )
+        adapter_rank = max(16, self.embedding_dim // 8)
+        head_hidden = max(self.embedding_dim // 2, 32)
+        self.towers = nn.ModuleDict()
+        for target_name, n_classes in output_dims.items():
+            adapter = nn.Sequential(
+                nn.Linear(self.embedding_dim, adapter_rank),
+                nn.GELU(),
+                nn.Linear(adapter_rank, self.embedding_dim),
+            )
+            head = nn.Sequential(
+                nn.LayerNorm(self.embedding_dim),
+                nn.Linear(self.embedding_dim, head_hidden),
+                nn.GELU(),
+                nn.Linear(head_hidden, int(n_classes)),
+            )
+            self.towers[target_name] = nn.ModuleDict({"adapter": adapter, "head": head})
+
+        # -----------------------------------------------
+        # Adapter initialization & scaling
+        # - adapter를 residual로 더할 때 폭주하지 않도록
+        # - up projection을 매우 작은 std로 초기화하는 패턴
+        # -----------------------------------------------
+        for target_name, module in self.towers.items():
+            adapter = module["adapter"]
+            # adapter = [Linear(D->r), GELU, Linear(r->D)]
+
+            # down projection: Xavier로 기본 안정화
+            if isinstance(adapter[0], nn.Linear):
+                nn.init.xavier_uniform_(adapter[0].weight)
+                if adapter[0].bias is not None:
+                    nn.init.zeros_(adapter[0].bias)
+
+            # up projection: std를 매우 작게 -> 초기에는 거의 0에 가까운 residual
+            if isinstance(adapter[-1], nn.Linear):
+                nn.init.normal_(adapter[-1].weight, std=1e-3)
+                if adapter[-1].bias is not None:
+                    nn.init.zeros_(adapter[-1].bias)
 
         # -----------------------------------------------
         # Attention Pooling (옵션)
@@ -243,13 +310,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # Causal Attention Mask (look-ahead 차단)
         # -----------------------------------------------
-        # (seq_len, seq_len)
-        # True  = attention 차단 (미래를 못 봄)
-        # False = attention 허용
-        causal_mask = torch.triu(
+        # causal_attn_mask[t, u] = True  if u > t  (미래 차단)
+        # causal_attn_mask[t, u] = False if u <= t (과거/현재 허용)
+        causal_bool = torch.triu(
             torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1
         )
-        self.register_buffer("causal_attn_mask", causal_mask)
+        self.register_buffer("causal_attn_mask", causal_bool)
 
     def _compute_action_weight_tensor(
         self, action_sequence: torch.Tensor, masks: torch.Tensor, dtype: torch.dtype
@@ -366,17 +432,13 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         if masks.dtype != torch.bool:
             masks = masks.to(torch.bool)
 
-        batch_size = masks.size(0)
-        seq_len = masks.size(1)
-        embedding_dim = self.embedding_dim
-
-        # -------------------------------------------
+        # -----------------------------------------------
         # Causal Attention Mask
-        # -------------------------------------------
-        # (seq_len, seq_len)
+        # - hared_transformer, expert_transformer 모두 동일한 (seq_len, seq_len) causal mask 사용
+        # -----------------------------------------------
         causal_attn_mask = self.causal_attn_mask.to(device=masks.device)
 
-        # -------------------------------------------
+        # -----------------------------------------------
         # action weight (선택)
         # -------------------------------------------
         # weights: (batch_size, seq_len, 1)
@@ -389,46 +451,9 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         else:
             weights = None
 
-        # # -------------------------------------------
-        # # feature별 encoding (미래 토큰 차단 적용)
-        # # -------------------------------------------
-        # encoded_list = []
-        #
-        # for feature_name in self.features:
-        #     # token embedding
-        #     # 입력: (batch_size, seq_len)
-        #     # 출력: (batch_size, seq_len, embedding_dim)
-        #     x_embed = self.embeddings[feature_name](feature_sequences[feature_name])
-        #
-        #     # action weight 적용 (고정 가중치)
-        #     if weights is not None:
-        #         x_embed = x_embed * weights.to(dtype=x_embed.dtype)
-        #
-        #     # positional encoding
-        #     x_embed = self.position_encoding(x_embed)
-        #
-        #     # Transformer Encoder 적용
-        #     # - src_key_padding_mask: padding 무시 (batch_size, seq_len)
-        #     # - mask(causal_attn_mask): 미래 토큰 차단 (seq_len, seq_len)
-        #     x_embed = self.feature_encoders[feature_name](
-        #         x_embed,
-        #         mask=causal_attn_mask,
-        #         src_key_padding_mask=masks,
-        #     )
-        #
-        #     encoded_list.append(x_embed)
-        #
-        # # -------------------------------------------
-        # # shared sequence 생성
-        # # -------------------------------------------
-        # # concat: (batch_size, seq_len, embedding_dim * num_features)
-        # # proj:   (batch_size, seq_len, embedding_dim)
-        # shared_seq = torch.cat(encoded_list, dim=-1)
-        # shared_seq = self.shared_proj(shared_seq)
-
-        # -------------------------------------------
+        # -----------------------------------------------
         # Shared embedding (feature embedding 합산)
-        # -------------------------------------------
+        # -----------------------------------------------
         # x_embed: (batch_size, seq_len, embedding_dim)
         x_embed = 0.0
         for feature_name in self.features:
@@ -436,25 +461,30 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             f_embed = self.embeddings[feature_name](feature_sequences[feature_name])
             x_embed = x_embed + f_embed
 
-        # -------------------------------------------
-        # Action Embedding 추가 (`feature_sequences`에 action이 있으면 합산)
-        # -------------------------------------------
+        # -----------------------------------------------
+        # Action Embedding 추가 (선택)
+        # - `action`을 `feature_sequences`로 넣어둔 경우,
+        # - `action` 자체를 하나의 token feature처럼 임베딩해서 더해줄 수 있음.
+        # - 단, `action_weight`는 따로 곱해지므로 과하게 중복될 수 있어 실험적으로 판단 필요.
+        # -----------------------------------------------
         if "action" in feature_sequences and "action" in self.embeddings:
             action_embed = self.embeddings["action"](feature_sequences["action"])
             x_embed = x_embed + action_embed
 
-        # -------------------------------------------
+        # -----------------------------------------------
         # Action Weight 적용 (합산된 임베딩에 곱셈)
-        # -------------------------------------------
+        # - 합산된 embedding 전체에 timestep-wise 가중치 적용
+        # - weights: (batch_size, seq_len, 1) -> broadcasting으로 (batch_size, seq_len, embedding_dim)에 곱해짐
+        # -----------------------------------------------
         if weights is not None:
             x_embed = x_embed * weights.to(dtype=x_embed.dtype)
 
         # positional encoding: (batch_size, seq_len, embedding_dim)
         x_embed = self.position_encoding(x_embed)
 
-        # -------------------------------------------
+        # -----------------------------------------------
         # Shared Transformer Encoder 적용 (미래 토큰 차단)
-        # -------------------------------------------
+        # -----------------------------------------------
         # shared_seq: (batch_size, seq_len, embedding_dim)
         shared_seq = self.shared_transformer_encoder(
             x_embed,
@@ -462,83 +492,132 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             src_key_padding_mask=masks,  # (batch_size, seq_len)
         )
 
-        # -------------------------------------------
+        # -----------------------------------------------
         # pooling -> sequence representation
-        # -------------------------------------------
+        # - gate가 timestep-wise이긴 하지만,
+        # - 모델 전체를 대표하는 user vector가 필요해서 pooling 결과를 별도로 만듦.
+        # -----------------------------------------------
         # sequence_vector: (batch_size, embedding_dim)
         sequence_vector = self._apply_pooling(shared_seq, masks)
 
-        # -------------------------------------------
-        # experts (MLP expert, position-wise)
-        # -------------------------------------------
-        # shared_seq: (batch_size, seq_len, embedding_dim)
-        # flat:       (batch_size * seq_len, embedding_dim)
-        flat = shared_seq.reshape(batch_size * seq_len, embedding_dim)
+        # -----------------------------------------------
+        # experts (TransformerExpert)
+        # -----------------------------------------------
+        # 1) 먼저 각 target의 gate_logits (timestep-wise) 계산 및 top-k 인덱스 저장
+        gate_logits_per_target = {}
+        topk_idx_per_target = {}
+        for target_name in self.targets:
+            gate_logits = self.gates[target_name](
+                shared_seq
+            )  # (batch_size, seq_len, n_experts)
+            pad_mask = masks.unsqueeze(-1)  # (batch_size, seq_len, 1)
+            gate_logits = gate_logits.masked_fill(pad_mask, float("-1e9"))
+            gate_logits_per_target[target_name] = gate_logits
+            k = min(self.top_k, self.n_experts)
+            _, idx = gate_logits.topk(k, dim=-1)  # (batch_size, seq_len, n_experts)
+            topk_idx_per_target[target_name] = idx
 
-        # expert_outputs[i]: (batch_size, seq_len, embedding_dim)
+        # -------------------------------------------------
+        # (옵션) top-k union만 expert 계산하는 sparse compute 아이디어
+        # - 아래 블록은 "필요한 expert만 계산"하려는 시도인데, 현재는 주석 처리되어 있고, 아래에서 "모든 expert 계산"을 사용 중임.
+        # - 실제로 sparse compute는 구현 복잡도가 올라가므로 먼저 dense 버전이 안정적으로 학습되는지 확인하는 흐름이 합리적임.
+        # -------------------------------------------------
+        # 1.1) 모든 타겟·타임스텝에서 필요한 전문가들의 union 계산
+        # all_idx = torch.cat(
+        #     [v.reshape(-1) for v in topk_idx_per_target.values()], dim=0
+        # )
+        # unique_experts = torch.unique(all_idx).tolist() if all_idx.numel() > 0 else []
+
+        # 1.2)필요한 전문가들만 계산 (others -> zeros)
+        # expert_outputs = [None] * self.n_experts
+        # for e in unique_experts:
+        #     e_int = int(e)
+        #     # TransformerExpert 호출: shared_seq (batch_size, seq_len, embedding_dim), mask 적용
+        #     expert_out = self.experts[e_int](
+        #         shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
+        #     )  # (batch_size, seq_len, embedding_dim)
+        #     expert_outputs[e_int] = expert_out
+
+        # 1.3) 계산되지 않은 전문가 채우기 (zeros)
+        # for i in range(self.n_experts):
+        #     if expert_outputs[i] is None:
+        #         expert_outputs[i] = torch.zeros_like(shared_seq)
+
+        # 2) 모든 전문가를 한 번에 계산 (batch_size, seq_len, n_experts, embedding_dim)
         expert_outputs = []
         for expert in self.experts:
-            out = expert(flat)  # (batch_size * seq_len, embedding_dim)
-            out = out.reshape(batch_size, seq_len, embedding_dim)
+            out = expert(
+                shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
+            )  # (B,S,D)
             expert_outputs.append(out)
 
-        # expert_stack: (batch_size, seq_len, n_experts, embedding_dim)
+        # 3) expert_stack 생성 (batch_size, seq_len, n_experts, embedding_dim)
         expert_stack = torch.stack(expert_outputs, dim=2)
 
-        # -------------------------------------------
-        # task-wise routing + prediction (tower 제거)
-        # -------------------------------------------
+        # -----------------------------------------------
+        # task-wise routing + prediction
+        # -----------------------------------------------
         y_outputs: Dict[str, torch.Tensor] = {}
 
+        # ---------------------------------------
+        # 각 timestep마다 서로 다른 expert 조합 선택을 위해 timestep-wise 계산
+        # ---------------------------------------
         for target_name in self.targets:
-            # 각 timestep마다 서로 다른 expert 조합 선택을 위해 timestep-wise 계산을 할 수도 있으나,
-            # pooling 된 벡터를 사용하여 연산을 줄이고 시퀀스 맥락을 일반화하는 걸 의도함.
-            # gate_logits = self.gates[target_name](shared_seq)  # (B, S, n_experts)
-            # gate_weights = torch.softmax(gate_logits, dim=-1)  # (B, S, n_experts)
+            # 앞에서 계산된 `gate_logits` (batch_size, seq_len, n_experts)
+            gate_logits = gate_logits_per_target[
+                target_name
+            ]  # (batch_size, seq_len, n_experts)
 
-            # gate logits (`shared_seq` 말고 Pooling Vector로 계산)
-            # 입력: (batch_size, embedding_dim)
-            # 출력: (batch_size, n_experts)
-            gate_logits = self.gates[target_name](sequence_vector)
-            gate_weights = torch.softmax(gate_logits, dim=-1)
+            # top-k 인덱스 (batch_size, seq_len, n_experts)
+            topk_idx = topk_idx_per_target[target_name]
 
-            # ---------------------------------------
-            # fused sequence = Σ_k gate_{t,k} * expert_k(t)
-            # - 여러 expert들의 출력을 가중치로 합치는 단계
-            # 1) gate_weights: 각 expert의 중요도를 나타내는 확률값
-            #    - 예: [Expert_1: 0.6, Expert_2: 0.2, Expert_3: 0.1, Expert_4: 0.1]
-            #    - 합이 1.0이 되는 확률 분포 (softmax 적용됨)
-            #
-            # 2) expert_stack: 4개 expert가 각각 생성한 변환된 시퀀스들
-            #    - (batch_size, seq_len, 4개_expert, embedding_dim)
-            #    - 각 expert마다 다른 방식으로 시퀀스를 변환함
-            #
-            # 3) Weighted Sum (가중 합산):
-            #    - 각 expert의 출력에 gate_weights를 곱하고 모두 더함
-            #    - 결과: 가장 중요한 expert들의 출력이 최종 시퀀스에 더 많이 반영됨
-            #    - 예: 0.6*Expert_1_output + 0.2*Expert_2_output + 0.1*Expert_3_output + ...
-            #
-            # [효과]
-            # - 각 task별로 필요한 전문성(expertise)을 동적으로 조합
-            # - 비효율적인 expert는 가중치가 작아짐
-            # - 학습 과정에서 자동으로 각 expert의 역할이 결정됨
-            # ---------------------------------------
-            # expert_stack: (batch_size, seq_len, n_experts, embedding_dim)
+            # 1) top-k mask 생성 # (B, S, n_experts)
+            # topk_mask: (batch_size, seq_len, n_experts)
+            topk_mask = torch.zeros_like(gate_logits, dtype=torch.bool)
+            topk_mask = topk_mask.scatter_(-1, topk_idx, True)
+
+            # 2) padding timestep은 gating 대상에서 제외
+            # masks: (batch_size, seq_len) -> (batch_size, seq_len, 1)
+            pad_mask = masks.unsqueeze(-1)
+            topk_mask = topk_mask & (~pad_mask)
+
+            # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함 (이렇게 하면 top-k만 섞는 sparse routing이 강제됨)
+            neg_inf = -1e9
+            if gate_logits.dtype == torch.float16:
+                # fp16에서 -1e9가 overflow될 수 있어 dtype 기반으로 안전하게 처리
+                neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
+            sparse_logits = gate_logits.masked_fill(~topk_mask, neg_inf)
+
+            # 4) temperature softmax
+            # - `gate_temperature`가 너무 작아지면 분포가 과하게 샤프해질 수 있어 clamp 처리
+            temp = torch.clamp(self.gate_temperature, min=0.01)
             # gate_weights: (batch_size, seq_len, n_experts)
-            # gate_weights를 mixing용으로 확장
-            # (batch_size, seq_len, n_experts) -> (batch_size, seq_len, n_experts, 1)
-            gate_expand = gate_weights.unsqueeze(1).unsqueeze(-1)
+            gate_weights = torch.softmax(sparse_logits / temp, dim=-1)
 
+            # 5) fused_seq = Σ_k gate_weight_k * expert_out_k
+            # gate_expand: (batch_size, seq_len, n_experts, 1)
+            gate_expand = gate_weights.unsqueeze(-1)
             # fused_seq: (batch_size, seq_len, embedding_dim)
             fused_seq = (expert_stack * gate_expand).sum(dim=2)
 
-            # logits
-            # 입력: (batch_size, seq_len, embedding_dim)
-            # 출력: (batch_size, seq_len, n_classes)
-            y_outputs[target_name] = self.output_heads[target_name](fused_seq)
+            # 6) target별 adapter + head로 logits 생성
+            tower = self.towers[target_name]
+            adapter = tower["adapter"]
+            head = tower["head"]
 
-        # -------------------------------------------
+            # adapter는 residual 형태로 적용
+            # adapted: (batch_size, seq_len, embedding_dim)
+            adapted = adapter(fused_seq)
+            # fused_res: (batch_size, seq_len, embedding_dim)
+            fused_res = fused_seq + adapted
+
+            # head로 logits 생성
+            logits = head(fused_res)  # (batch_size, seq_len, n_classes)
+            y_outputs[target_name] = logits
+
+        # -----------------------------------------------
         # sequence vector (as user vector)
-        # -------------------------------------------
+        # -----------------------------------------------
         # sequence_vector: (batch_size, embedding_dim)
+
         return sequence_vector, y_outputs
