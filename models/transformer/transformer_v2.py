@@ -498,41 +498,28 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # 1) 먼저 각 target의 gate_logits (timestep-wise) 계산 및 top-k 인덱스 저장
         gate_logits_per_target = {}
         topk_idx_per_target = {}
+        k = min(self.top_k, self.n_experts)
         for target_name in self.targets:
             # gate_logits: (batch_size, seq_len, n_experts)
             gate_logits = self.gates[target_name](shared_seq)
-            pad_mask = masks.unsqueeze(-1)  # (batch_size, seq_len, 1)
-            gate_logits = gate_logits.masked_fill(pad_mask, float("-1e9"))
-            gate_logits_per_target[target_name] = gate_logits
-            k = min(self.top_k, self.n_experts)
+
+            # padding timestep은 gating 대상에서 제외
+            # pad_mask: (batch_size, seq_len, 1)
+            pad_mask = masks.unsqueeze(-1)
+
+            # dtype-safe -inf
+            neg_inf = -1e9
+            if gate_logits.dtype == torch.float16:
+                neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
+
+            gate_logits = gate_logits.masked_fill(pad_mask, neg_inf)
+
+            # timestep별 top-k expert 선택
+            # idx: (batch_size, seq_len, k)
             _, idx = gate_logits.topk(k, dim=-1)
+
+            gate_logits_per_target[target_name] = gate_logits
             topk_idx_per_target[target_name] = idx
-
-        # -------------------------------------------------
-        # (옵션) top-k union만 expert 계산하는 sparse compute 아이디어
-        # - 아래 블록은 "필요한 expert만 계산"하려는 시도인데, 현재는 주석 처리되어 있고, 아래에서 "모든 expert 계산"을 사용 중임.
-        # - 실제로 sparse compute는 구현 복잡도가 올라가므로 먼저 dense 버전이 안정적으로 학습되는지 확인하는 흐름이 합리적임.
-        # -------------------------------------------------
-        # 1.1) 모든 타겟·타임스텝에서 필요한 expert들의 union 계산
-        # all_idx = torch.cat(
-        #     [v.reshape(-1) for v in topk_idx_per_target.values()], dim=0
-        # )
-        # unique_experts = torch.unique(all_idx).tolist() if all_idx.numel() > 0 else []
-
-        # 1.2)필요한 expert들만 계산 (others -> zeros)
-        # expert_outputs = [None] * self.n_experts
-        # for i in unique_experts:
-        #     # TransformerExpert 호출 (shared_seq, mask 적용)
-        #     # expert_out: (batch_size, seq_len, embedding_dim)
-        #     expert_out = self.experts[i](
-        #         shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
-        #     )
-        #     expert_outputs[i] = expert_out
-
-        # 1.3) 계산되지 않은 expert 채우기 (zeros)
-        # for i in range(self.n_experts):
-        #     if expert_outputs[i] is None:
-        #         expert_outputs[i] = torch.zeros_like(shared_seq)
 
         # 2) 모든 expert를 한 번에 계산
         expert_outputs = []
@@ -552,9 +539,9 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         y_outputs: Dict[str, torch.Tensor] = {}
 
-        # ---------------------------------------
+        # -----------------------------------------------
         # 각 timestep마다 서로 다른 expert 조합 선택을 위해 timestep-wise 계산
-        # ---------------------------------------
+        # -----------------------------------------------
         for target_name in self.targets:
             gate_logits = gate_logits_per_target[target_name]
 
