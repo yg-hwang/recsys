@@ -435,6 +435,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # Causal Attention Mask
         # - hared_transformer, expert_transformer 모두 동일한 (seq_len, seq_len) causal mask 사용
+        # - causal_attn_mask: (seq_len, seq_len)
         # -----------------------------------------------
         causal_attn_mask = self.causal_attn_mask.to(device=masks.device)
 
@@ -487,9 +488,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # shared_seq: (batch_size, seq_len, embedding_dim)
         shared_seq = self.shared_transformer_encoder(
-            x_embed,
-            mask=causal_attn_mask,  # (seq_len, seq_len)
-            src_key_padding_mask=masks,  # (batch_size, seq_len)
+            x_embed, mask=causal_attn_mask, src_key_padding_mask=masks
         )
 
         # -----------------------------------------------
@@ -507,14 +506,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         gate_logits_per_target = {}
         topk_idx_per_target = {}
         for target_name in self.targets:
-            gate_logits = self.gates[target_name](
-                shared_seq
-            )  # (batch_size, seq_len, n_experts)
+            # gate_logits: (batch_size, seq_len, n_experts)
+            gate_logits = self.gates[target_name](shared_seq)
             pad_mask = masks.unsqueeze(-1)  # (batch_size, seq_len, 1)
             gate_logits = gate_logits.masked_fill(pad_mask, float("-1e9"))
             gate_logits_per_target[target_name] = gate_logits
             k = min(self.top_k, self.n_experts)
-            # gate_logits: (batch_size, seq_len, n_experts)
             _, idx = gate_logits.topk(k, dim=-1)
             topk_idx_per_target[target_name] = idx
 
@@ -531,28 +528,30 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # 1.2)필요한 전문가들만 계산 (others -> zeros)
         # expert_outputs = [None] * self.n_experts
-        # for e in unique_experts:
-        #     e_int = int(e)
-        #     # TransformerExpert 호출: shared_seq (batch_size, seq_len, embedding_dim), mask 적용
-        #     expert_out = self.experts[e_int](
+        # for i in unique_experts:
+        #     # TransformerExpert 호출 (shared_seq, mask 적용)
+        #     # expert_out: (batch_size, seq_len, embedding_dim)
+        #     expert_out = self.experts[i](
         #         shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
-        #     )  # (batch_size, seq_len, embedding_dim)
-        #     expert_outputs[e_int] = expert_out
+        #     )
+        #     expert_outputs[i] = expert_out
 
         # 1.3) 계산되지 않은 전문가 채우기 (zeros)
         # for i in range(self.n_experts):
         #     if expert_outputs[i] is None:
         #         expert_outputs[i] = torch.zeros_like(shared_seq)
 
-        # 2) 모든 전문가를 한 번에 계산 (batch_size, seq_len, n_experts, embedding_dim)
+        # 2) 모든 전문가를 한 번에 계산
         expert_outputs = []
         for expert in self.experts:
+            # out: (batch_size, seq_len, embedding_dim)
             out = expert(
                 shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
-            )  # (batch_size, seq_len, embedding_dim)
+            )
             expert_outputs.append(out)
 
-        # 3) expert_stack 생성 (batch_size, seq_len, n_experts, embedding_dim)
+        # 3) expert_stack 생성
+        # - expert_stack: (batch_size, seq_len, n_experts, embedding_dim)
         expert_stack = torch.stack(expert_outputs, dim=2)
 
         # -----------------------------------------------
