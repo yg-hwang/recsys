@@ -62,19 +62,11 @@ class MultiTaskMoESequenceTransformer(nn.Module):
     """
     MoSE 기반 Multi-task Classification (MoSE 논문 응용 버전)
     - 여러 feature sequence를 입력으로 받아, 각 feature별 "다음 시퀀스"를 예측
-    - pooling된 `sequence_vector`을 user vector로 사용
-
-    응용 포인트
-    ----------
-    1) LSTM 대신 TransformerEncoder로 변경
-    2) expert를 MLP로 변경
-       - Transformer expert 대신 position-wise MLP expert 적용
-       - 시간축(seq_len) mixing은 feature encoder 단계(Transformer)에서만 발생하고,
-         expert는 각 timestep 벡터를 변환하는 역할만 수행 (연산량 대폭 감소)
-
-    3) action weight 반영
+    - LSTM 대신 TransformerEncoder로 변경
+    - action weight 반영
         - `action_sequence`(클릭/찜/구매 등)와 `action_weights`가 주어지면,
-          timestep별 가중치를 모든 feature token embedding에 곱해 행동 중요도를 반영
+           timestep별 가중치를 모든 feature token embedding에 곱해 행동 중요도를 반영
+    - pooling된 `sequence_vector`을 user vector로 사용
     """
 
     def __init__(
@@ -369,6 +361,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
     def _apply_pooling(self, x: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
         """
         Transformer 출력 시퀀스를 하나의 벡터로 요약
+
         :param x: (batch_size, seq_len, embedding_dim)
         :param masks: (batch_size, seq_len)
         :return: (batch_size, embedding_dim)
