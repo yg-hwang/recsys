@@ -520,13 +520,13 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # - 아래 블록은 "필요한 expert만 계산"하려는 시도인데, 현재는 주석 처리되어 있고, 아래에서 "모든 expert 계산"을 사용 중임.
         # - 실제로 sparse compute는 구현 복잡도가 올라가므로 먼저 dense 버전이 안정적으로 학습되는지 확인하는 흐름이 합리적임.
         # -------------------------------------------------
-        # 1.1) 모든 타겟·타임스텝에서 필요한 전문가들의 union 계산
+        # 1.1) 모든 타겟·타임스텝에서 필요한 expert들의 union 계산
         # all_idx = torch.cat(
         #     [v.reshape(-1) for v in topk_idx_per_target.values()], dim=0
         # )
         # unique_experts = torch.unique(all_idx).tolist() if all_idx.numel() > 0 else []
 
-        # 1.2)필요한 전문가들만 계산 (others -> zeros)
+        # 1.2)필요한 expert들만 계산 (others -> zeros)
         # expert_outputs = [None] * self.n_experts
         # for i in unique_experts:
         #     # TransformerExpert 호출 (shared_seq, mask 적용)
@@ -536,12 +536,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         #     )
         #     expert_outputs[i] = expert_out
 
-        # 1.3) 계산되지 않은 전문가 채우기 (zeros)
+        # 1.3) 계산되지 않은 expert 채우기 (zeros)
         # for i in range(self.n_experts):
         #     if expert_outputs[i] is None:
         #         expert_outputs[i] = torch.zeros_like(shared_seq)
 
-        # 2) 모든 전문가를 한 번에 계산
+        # 2) 모든 expert를 한 번에 계산
         expert_outputs = []
         for expert in self.experts:
             # out: (batch_size, seq_len, embedding_dim)
