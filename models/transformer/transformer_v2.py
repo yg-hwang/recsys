@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, Tuple, Optional, Literal, Union
 
-from .layers import EmbeddingLayer, AttentionPooling, LearnablePositionalEncoding, MLP
+from .layers import EmbeddingLayer, AttentionPooling, LearnablePositionalEncoding
 
 
 class TransformerExpert(nn.Module):
@@ -514,7 +514,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             gate_logits = gate_logits.masked_fill(pad_mask, float("-1e9"))
             gate_logits_per_target[target_name] = gate_logits
             k = min(self.top_k, self.n_experts)
-            _, idx = gate_logits.topk(k, dim=-1)  # (batch_size, seq_len, n_experts)
+            # gate_logits: (batch_size, seq_len, n_experts)
+            _, idx = gate_logits.topk(k, dim=-1)
             topk_idx_per_target[target_name] = idx
 
         # -------------------------------------------------
@@ -548,7 +549,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         for expert in self.experts:
             out = expert(
                 shared_seq, src_key_padding_mask=masks, attn_mask=causal_attn_mask
-            )  # (B,S,D)
+            )  # (batch_size, seq_len, embedding_dim)
             expert_outputs.append(out)
 
         # 3) expert_stack 생성 (batch_size, seq_len, n_experts, embedding_dim)
@@ -563,15 +564,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # 각 timestep마다 서로 다른 expert 조합 선택을 위해 timestep-wise 계산
         # ---------------------------------------
         for target_name in self.targets:
-            # 앞에서 계산된 `gate_logits` (batch_size, seq_len, n_experts)
-            gate_logits = gate_logits_per_target[
-                target_name
-            ]  # (batch_size, seq_len, n_experts)
+            gate_logits = gate_logits_per_target[target_name]
 
             # top-k 인덱스 (batch_size, seq_len, n_experts)
             topk_idx = topk_idx_per_target[target_name]
 
-            # 1) top-k mask 생성 # (B, S, n_experts)
+            # 1) top-k mask 생성
             # topk_mask: (batch_size, seq_len, n_experts)
             topk_mask = torch.zeros_like(gate_logits, dtype=torch.bool)
             topk_mask = topk_mask.scatter_(-1, topk_idx, True)
@@ -581,7 +579,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             pad_mask = masks.unsqueeze(-1)
             topk_mask = topk_mask & (~pad_mask)
 
-            # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함 (이렇게 하면 top-k만 섞는 sparse routing이 강제됨)
+            # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함
+            # - 이렇게 하면 top-k만 섞는 sparse routing이 강제됨
             neg_inf = -1e9
             if gate_logits.dtype == torch.float16:
                 # fp16에서 -1e9가 overflow될 수 있어 dtype 기반으로 안전하게 처리
@@ -612,7 +611,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             fused_res = fused_seq + adapted
 
             # head로 logits 생성
-            logits = head(fused_res)  # (batch_size, seq_len, n_classes)
+            # logits: (batch_size, seq_len, n_classes)
+            logits = head(fused_res)
             y_outputs[target_name] = logits
 
         # -----------------------------------------------
