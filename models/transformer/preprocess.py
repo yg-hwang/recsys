@@ -1,6 +1,7 @@
 import torch
 import logging
 import numpy as np
+import polars as pl
 import pandas as pd
 from typing import List, Tuple, Union
 from sklearn.preprocessing import LabelEncoder
@@ -24,7 +25,7 @@ class FeatureLabelEncoder(LabelEncoder):
         self._all_encoders = {}  # 컬럼별 LabelEncoder 객체 저장
         self.special_tokens = ["-999", "<UNK>"]  # 특수 토큰
 
-    def fit(self, df: pd.DataFrame):
+    def fit(self, df: Union[pd.DataFrame, pl.DataFrame]) -> None:
         """
         전달된 DataFrame의 모든 컬럼에 대해 LabelEncoder를 생성
         - '-999', '<UNK>' 토큰을 반드시 포함 ('-999': Masking Value, 'UNK': Unseen Value)
@@ -34,11 +35,21 @@ class FeatureLabelEncoder(LabelEncoder):
             # 개별 feature LabelEncoder 생성
             le = LabelEncoder()
 
-            # 고유값 추출 후, 특수 토큰을 강제로 포함
-            values = df.loc[:, column].astype(str).unique().tolist()
+            if isinstance(df, pd.DataFrame):
+                values = df.loc[:, column].astype(str).unique().tolist()
+
+            elif isinstance(df, pl.DataFrame):
+                values = df[column].cast(pl.String).unique().to_list()
+
+            else:
+                raise ValueError(
+                    "Dataset should be a `pl.DataFrame` or a `pd.DataFrame`."
+                )
+
+            # 고유값 추출 후, 특수 토큰을 필수로 포함
             values = list(set(values) | set(self.special_tokens))
 
-            # 고유값 집합으로 인코더 학습
+            # 인코더 fitting
             le.fit(values)
 
             # classes_를 그대로 저장해두면 나중에 매핑을 외부로 내보낼 때도 유용
@@ -48,30 +59,60 @@ class FeatureLabelEncoder(LabelEncoder):
             self._all_encoders[column] = le
         logging.debug(">>> LabelEncoder created.")
 
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+    def transform(
+        self, df: Union[pd.DataFrame, pl.DataFrame]
+    ) -> Union[pd.DataFrame, pl.DataFrame]:
         """
         학습된 인코더로 각 컬럼 값을 정수로 변환
         """
 
         for column in sorted(df.columns):
-            values = df.loc[:, column].astype(str).to_numpy()
-            encoded_values = self._all_encoders[column].transform(values)
-            df.loc[:, column] = encoded_values  # 정수 인코딩된 값으로 덮어쓰기
+
+            if isinstance(df, pd.DataFrame):
+                values = df.loc[:, column].astype(str).to_numpy()
+                encoded_values = self._all_encoders[column].transform(values)
+                df.loc[:, column] = encoded_values
+
+            elif isinstance(df, pl.DataFrame):
+                values = df[column].cast(pl.String).unique()
+                encoded_values = self._all_encoders[column].transform(values)
+                df = df.with_columns(pl.Series(name=column, values=encoded_values))
+
+            else:
+                raise ValueError(
+                    "Dataset should be a `pl.DataFrame` or a `pd.DataFrame`."
+                )
+
         logging.debug(">>> Encoding completed.")
 
         return df
 
-    def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+    def inverse_transform(
+        self, df: Union[pd.DataFrame, pl.DataFrame]
+    ) -> Union[pd.DataFrame, pl.DataFrame]:
         """
         정수로 인코딩된 각 컬럼을 원래 label로 복원
         - LabelEncoder.inverse_transform은 1D 배열을 기대하므로 컬럼별로 개별 호출
         """
 
         for column in sorted(df.columns):
-            decoded_values = self._all_encoders[column].inverse_transform(
-                df.loc[:, column].to_list()
-            )
-            df[column] = decoded_values  # 원본 값으로 되돌림
+
+            if isinstance(df, pd.DataFrame):
+                decoded_values = self._all_encoders[column].inverse_transform(
+                    df.loc[:, column].to_list()
+                )
+                df[column] = decoded_values
+
+            elif isinstance(df, pl.DataFrame):
+                decoded_values = self._all_encoders[column].inverse_transform(
+                    df[column].to_list()
+                )
+                df = df.with_columns(pl.Series(name=column, values=decoded_values))
+
+            else:
+                raise ValueError(
+                    "Dataset should be a `pl.DataFrame` or a `pd.DataFrame`."
+                )
 
         return df
 
@@ -84,7 +125,7 @@ class FeatureLabelEncoder(LabelEncoder):
         return self._all_encoders
 
 
-class SequenceGenerator:
+class SequenceGeneratorPandas:
     def __init__(
         self,
         max_seq_len: int = 10,
@@ -94,7 +135,7 @@ class SequenceGenerator:
         partition_by: str = None,
     ):
         """
-        시퀀스 데이터셋 생성 클래스
+        시퀀스 데이터셋 생성 클래스 (Pandas)
         - 개별 유저의 행동 로그를 시퀀스 형태로 변환
         - Transformer 등 Sequential 모델 학습에 필요한 입력 형식으로 준비
 
@@ -190,7 +231,8 @@ class SequenceGenerator:
     def get_seq_dataframe(
         self,
         data: pd.DataFrame,
-        feature_sequences: List[str],
+        feature_sequence: List[str],
+        feature_nonsequences: List[str] = None,
         output_targets: List[str] = None,
     ) -> pd.DataFrame:
         """
@@ -199,7 +241,8 @@ class SequenceGenerator:
         - padding/mask/target까지 포함된 구조로 반환
 
         :param data: 입력 DataFrame (user_id, item_id, timestamp 포함)
-        :param feature_sequences: 시퀀스로 만들 feature 컬럼 리스트
+        :param feature_sequence: 시퀀스로 만들 feature 컬럼 리스트
+        :param feature_nonsequences: 그 외 Dense 혹은 Sparse feature 컬럼 리스트
         :param output_targets: Target Label로 사용할 feature 컬럼 리스트
         """
 
@@ -228,7 +271,7 @@ class SequenceGenerator:
 
             return seqs
 
-        for idx, col_name in enumerate(feature_sequences):
+        for idx, col_name in enumerate(feature_sequence):
             self.features.append(col_name)
 
             # 입력 시퀀스 생성
@@ -285,9 +328,21 @@ class SequenceGenerator:
         self.targets.append(f"y_{self.item_id}")
 
         # (6) 최종 컬럼 정리
-        columns = (
-            [self.user_id, "user_rn", "seq_len", "mask"] + self.features + self.targets
-        )
+        if feature_nonsequences is not None:
+            data_output = pd.concat([data_output, data[feature_nonsequences]], axis=1)
+            columns = (
+                [self.user_id, "user_rn", "seq_len", "mask"]
+                + self.features
+                + feature_nonsequences
+                + self.targets
+            )
+        else:
+            columns = (
+                [self.user_id, "user_rn", "seq_len", "mask"]
+                + self.features
+                + self.targets
+            )
+
         if self.partition_by is not None:
             columns.append(self.partition_by)
 
@@ -315,7 +370,9 @@ class SequentialDataset(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        feature_sequences: List[str],
+        feature_sequence: List[str],
+        feature_sparse: List[str] = None,
+        feature_dense: List[str] = None,
         action_sequence: str = None,
         targets: List[str] = None,
         device: str = "cpu",
@@ -325,14 +382,18 @@ class SequentialDataset(Dataset):
         (DataLoader에서 batch 단위 텐서 추출 가능)
 
         :param df: 시퀀스 데이터셋 (SequenceGenerator 결과)
-        :param feature_sequences: 입력 feature로 사용할 컬럼명
+        :param feature_sequence: 입력 feature로 사용할 컬럼명
+        :param feature_sparse: 범주형(Sparse) 단일 feature 컬럼명
+        :param feature_dense: 수치형(Dense) 단일 feature 컬럼명
         :param action_sequence: 행동 가중치로 사용할 컬럼명
         :param targets: 예측할 target label 컬럼명
         :param device: 텐서를 저장할 장치 (CPU/GPU)
         """
 
         # {컬럼명: torch.Tensor} 딕셔너리
-        self.feature_sequences: Dict[str, torch.Tensor] = {}
+        self.feature_sequence: Dict[str, torch.Tensor] = {}
+        self.feature_sparse: Dict[str, torch.Tensor] = {}
+        self.feature_dense: Dict[str, torch.Tensor] = {}
 
         # 마스크 텐서 (패딩 여부: 0=실제값, 1=패딩)
         self.masks: torch.Tensor
@@ -343,7 +404,7 @@ class SequentialDataset(Dataset):
         # -----------------------------------------------
         # feature 시퀀스 준비
         # -----------------------------------------------
-        for feature in feature_sequences:
+        for feature in feature_sequence:
             if feature == "mask":
                 # mask 컬럼: float32 (Transformer attention mask용)
                 # shape = (num_samples, max_seq_len)
@@ -354,7 +415,22 @@ class SequentialDataset(Dataset):
             else:
                 # 나머지 feature는 정수형 시퀀스 (category_id 등)
                 x = np.array([np.array(x).astype(np.int32) for x in df[feature]])
-                self.feature_sequences[feature] = torch.from_numpy(x).to(device)
+                self.feature_sequence[feature] = torch.from_numpy(x).to(device)
+
+        # -----------------------------------------------
+        # Sparse / Dense feature 준비 (Non-sequence)
+        # -----------------------------------------------
+        if feature_sparse is not None:
+            for feature in feature_sparse:
+                self.feature_sparse[feature] = torch.from_numpy(
+                    df[feature].values.astype(np.int32)
+                ).to(device)
+
+        if feature_dense is not None:
+            for feature in feature_dense:
+                self.feature_dense[feature] = torch.from_numpy(
+                    df[feature].values.astype(np.float32)
+                ).to(device)
 
         # -----------------------------------------------
         # 행동 가중치 시퀀스 준비
@@ -381,25 +457,36 @@ class SequentialDataset(Dataset):
     def __len__(self):
         """
         데이터셋의 전체 샘플 개수 반환
-        - feature_sequences 중 아무거나 하나 선택해서 길이 반환
+        - feature_sequence 중 아무거나 하나 선택해서 길이 반환
         """
 
-        feature = list(self.feature_sequences.keys())[0]
-        return self.feature_sequences[feature].shape[0]
+        feature = list(self.feature_sequence.keys())[0]
+        return self.feature_sequence[feature].shape[0]
 
     def __getitem__(self, idx):
         """
         개별 샘플 반환 (DataLoader가 batch 단위로 모아줌)
-        - feature_sequences: {feature_name: 시퀀스 텐서}
+        - feature_sequence: {feature_name: 시퀀스 텐서}
         - mask: 해당 시퀀스의 패딩 마스크
         - targets: target label (있으면 반환, 없으면 None)
         """
 
-        # 입력 feature 시퀀스에서 idx번째 샘플 꺼내기
-        feature_sequences = {
-            feature_name: sequence[idx]
-            for feature_name, sequence in self.feature_sequences.items()
+        # 입력 feature에서 idx번째 샘플 꺼내기
+        feature_sequence = {
+            name: val[idx] for name, val in self.feature_sequence.items()
         }
+
+        if self.feature_sparse:
+            feature_sparse = {
+                name: val[idx] for name, val in self.feature_sparse.items()
+            }
+        else:
+            feature_sparse = {}
+
+        if self.feature_dense:
+            feature_dense = {name: val[idx] for name, val in self.feature_dense.items()}
+        else:
+            feature_dense = {}
 
         # target이 있으면 target까지 반환 (학습 및 검증용)
         if self.targets is not None:
@@ -409,22 +496,41 @@ class SequentialDataset(Dataset):
             }
             # 행동 시퀀스가 있을 때
             if self.action_sequence is not None:
-                return (
-                    feature_sequences,
-                    self.action_sequence[idx],
-                    self.masks[idx],
-                    targets,
-                )
+                return {
+                    "feature_sequence": feature_sequence,
+                    "feature_dense": feature_dense,
+                    "feature_sparse": feature_sparse,
+                    "action_sequence": self.action_sequence[idx],
+                    "masks": self.masks[idx],
+                    "targets": targets,
+                }
             # 행동 시퀀스가 없을 때
             else:
-                return feature_sequences, self.masks[idx], targets
+                return {
+                    "feature_sequence": feature_sequence,
+                    "feature_dense": feature_dense,
+                    "feature_sparse": feature_sparse,
+                    "masks": self.masks[idx],
+                    "targets": targets,
+                }
 
         # target이 없으면 모델 입력 값만 반환 (추론용)
         else:
             if self.action_sequence is not None:
-                return feature_sequences, self.action_sequence[idx], self.masks[idx]
+                return {
+                    "feature_sequence": feature_sequence,
+                    "feature_dense": feature_dense,
+                    "feature_sparse": feature_sparse,
+                    "action_sequence": self.action_sequence[idx],
+                    "masks": self.masks[idx],
+                }
             else:
-                return feature_sequences, self.masks[idx]
+                return {
+                    "feature_sequence": feature_sequence,
+                    "feature_dense": feature_dense,
+                    "feature_sparse": feature_sparse,
+                    "masks": self.masks[idx],
+                }
 
 
 class SequenceVectorDataset(Dataset):

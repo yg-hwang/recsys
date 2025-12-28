@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from typing import Dict, Tuple, Optional, Literal, Union
+from typing import Dict, Optional, Literal, Union
+from torch import Tensor
 
 from .layers import EmbeddingLayer, AttentionPooling, LearnablePositionalEncoding
 
@@ -34,7 +35,7 @@ class TransformerExpert(nn.Module):
         # -------------------------------------------------
         # residual + layer norm을 명시적으로 한 번 더 적용
         # - encoder 내부에도 residual이 있지만, 여기서는 expert 전체를 하나의 블록으로 보고
-        #   "입력 x + expert_out" 형태로 안정적인 업데이트를 보장
+        # - "입력 x + expert_out" 형태로 안정적인 업데이트를 보장
         # -------------------------------------------------
         self.ln = nn.LayerNorm(embedding_dim)
 
@@ -63,6 +64,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
     MoSE 기반 Multi-task Classification (MoSE 논문 응용 버전)
     - 여러 feature sequence를 입력으로 받아, 각 feature별 "다음 시퀀스"를 예측
     - LSTM 대신 TransformerEncoder로 변경
+    - non-sequential feature 반영
     - action weight 반영
         - `action_sequence`(클릭/찜/구매 등)와 `action_weights`가 주어지면,
            timestep별 가중치를 모든 feature token embedding에 곱해 행동 중요도를 반영
@@ -71,8 +73,9 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
     def __init__(
         self,
-        feature_dims: Dict[str, int],
+        feature_sequence_dims: Dict[str, int],
         action_weights: Dict[int, Union[int, float]] = None,
+        # ---------- TransformerEncoder 하이퍼파라미터 ---------- #
         embedding_dim: int = 64,
         seq_len: int = 10,
         n_heads: int = 2,
@@ -82,13 +85,17 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # ---------- MoE 관련 하이퍼파라미터 ---------- #
         n_experts: int = 4,
         dropout: float = 0.0,
-        expert_layers: int = 1,  # will be used as TransformerExpert num_layers
+        expert_layers: int = 1,
         expert_nhead: int = 1,
-        top_k: int = 2,  # top-k for gating sparsity
+        top_k: int = None,
+        # ---------- non-sequential feature ---------- #
+        feature_sparse_dims: Optional[Dict[str, int]] = None,
+        feature_dense_dims: Optional[Dict[str, int]] = None,
+        dense_hidden: int = 64,
     ):
         """
-        :param feature_dims:
-            입력 feature 이름과 feature별 클래스 개수
+        :param feature_sequence_dims:
+            입력 시퀀스 feature 이름과 클래스 개수
             예) {"color": 10, "price": 8, "category": 20, "action": 4}
 
         :param action_weights:
@@ -141,8 +148,13 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         self.expert_nhead = expert_nhead
         self.n_experts = n_experts
 
-        # top_k는 n_experts보다 클 수 없으므로 안전 처리
-        self.top_k = min(top_k, n_experts)
+        # -------------------------------------------------
+        # Top-K Gating
+        # - 원래 의도는 전체 expert 개수 보다 적은 개수만 gating에 사용하는 것
+        # - 그런데 expert가 8개 이하로 적을 때는 오히려 전체를 사용하는 게 학습 안정성이 높을 수 있으므로,
+        # - 'top_k'가 None이면 전체 expert를 사용함.
+        # -------------------------------------------------
+        self.top_k = n_experts if top_k is None else min(top_k, n_experts)
 
         # expert layer는 최소 1을 보장
         self.expert_num_layers = max(1, int(expert_layers))
@@ -154,13 +166,18 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # - temperature ↑ : 더 고르게 섞는 routing (소프트)
         # -------------------------------------------------
         self.gate_temperature = nn.Parameter(torch.tensor(1.0))
+        self.gate_temp_min = 0.5  # 너무 샤프해지는 것 방지
+        self.gate_temp_max = 2.0  # 너무 퍼지는 것 방지
+
+        # gate 입력 안정화
+        self.gate_ln = nn.LayerNorm(self.embedding_dim)
 
         # -----------------------------------------------
         # 입력 feature 구성
-        # - feature_dims에 "action"이 있어도 token embedding feature에서는 제외
+        # - feature_sequence_dims에 "action"이 있어도 token embedding feature에서는 제외
         # - action은 별도 `action_sequence`로 처리
         # -----------------------------------------------
-        self.features = [k for k in feature_dims.keys() if k != "action"]
+        self.features = [k for k in feature_sequence_dims.keys() if k != "action"]
 
         # task(target) 이름은 `output_dims`의 key를 그대로 사용
         self.targets = list(output_dims.keys())
@@ -173,7 +190,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         self.embeddings = nn.ModuleDict(
             {
                 name: EmbeddingLayer(int(n_classes), embedding_dim)
-                for name, n_classes in feature_dims.items()
+                for name, n_classes in feature_sequence_dims.items()
             }
         )
 
@@ -309,6 +326,42 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         )
         self.register_buffer("causal_attn_mask", causal_bool)
 
+        # -----------------------------------------------
+        # Non-sequential features
+        # -----------------------------------------------
+        # 1) sparse: 각 feature -> (batch_size, embedding_dim) 임베딩 후 합산
+        self.feature_sparse_dims = feature_sparse_dims or {}
+        self.sparse_embeddings = nn.ModuleDict(
+            {
+                name: EmbeddingLayer(int(vocab), self.embedding_dim)
+                for name, vocab in self.feature_sparse_dims.items()
+            }
+        )
+        # ctx_embed: context vector
+        self.sparse_ctx_embed_ln = nn.LayerNorm(self.embedding_dim)
+
+        # 2) dense: concat 후 projector로 (batch_size, embedding) 출력
+        self.feature_dense_dims = feature_dense_dims or {}
+        self.dense_total_dim = (
+            # dense feature에는 스칼라 혹은 벡터 모두 들어올 수 있으므로 전체 차원을 먼저 확인하도록 의도함.
+            int(sum(self.feature_dense_dims.values()))
+            if self.feature_dense_dims
+            else 0
+        )
+        if self.dense_total_dim > 0:
+            hidden = max(int(dense_hidden), self.embedding_dim)
+            self.dense_projector = nn.Sequential(
+                nn.LayerNorm(self.dense_total_dim),
+                nn.Linear(self.dense_total_dim, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, self.embedding_dim),
+            )
+        else:
+            self.dense_projector = None
+
+        # 최종 ctx_embed 스케일 정리
+        self.nonseq_ctx_embed_ln = nn.LayerNorm(self.embedding_dim)
+
     def _compute_action_weight_tensor(
         self, action_sequence: torch.Tensor, masks: torch.Tensor, dtype: torch.dtype
     ) -> torch.Tensor:
@@ -404,12 +457,16 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
     def forward(
         self,
-        feature_sequences: Dict[str, torch.Tensor],
+        feature_sequence: Dict[str, torch.Tensor],
+        feature_dense: Dict[str, torch.Tensor] = None,
+        feature_sparse: Dict[str, torch.Tensor] = None,
         action_sequence: Optional[torch.Tensor] = None,
         masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    ) -> dict[str, Tensor | dict[str, Tensor]]:
         """
-        :param feature_sequences: {feature_name: 시퀀스 텐서}
+        :param feature_sequence: {feature_name: 시퀀스 텐서}
+        :param feature_dense: {feature_name: Dense feature 텐서}
+        :param feature_sparse: {feature_name: Sparse feature 텐서}
         :param action_sequence: (선택) 행동 시퀀스 텐서
         :param masks: padding mask (batch_size, seq_len)
         :return:
@@ -452,18 +509,73 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         x_embed = 0.0
         for feature_name in self.features:
             # token embedding: (batch_size, seq_len) -> (batch_size, seq_len, embedding_dim)
-            f_embed = self.embeddings[feature_name](feature_sequences[feature_name])
+            f_embed = self.embeddings[feature_name](feature_sequence[feature_name])
             x_embed = x_embed + f_embed
 
         # -----------------------------------------------
         # Action Embedding 추가 (선택)
-        # - `action`을 `feature_sequences`로 넣어둔 경우,
+        # - `action`을 `feature_sequence`로 넣어둔 경우,
         # - `action` 자체를 하나의 token feature처럼 임베딩해서 더해줄 수 있음.
         # - 단, `action_weight`는 따로 곱해지므로 과하게 중복될 수 있어 실험적으로 판단 필요.
         # -----------------------------------------------
-        if "action" in feature_sequences and "action" in self.embeddings:
-            action_embed = self.embeddings["action"](feature_sequences["action"])
+        if "action" in feature_sequence and "action" in self.embeddings:
+            action_embed = self.embeddings["action"](feature_sequence["action"])
             x_embed = x_embed + action_embed
+
+        # -----------------------------------------------
+        # Non-sequential feature
+        # - sparse: embedding sum -> (batch_size, embedding_dim)
+        # - dense: concat -> projector -> (batch_size, embedding_dim)
+        # - ctx_embed는 모든 timestep에 broadcast 합산
+        # -----------------------------------------------
+        ctx_embed = None
+
+        # 1) sparse
+        if feature_sparse:
+            sparse_sum = 0.0
+            for name, x in feature_sparse.items():
+                # x: (batch_size,) or (batch_size, 1)
+                if x.dim() > 1:
+                    x = x.squeeze(-1)
+                if name not in self.sparse_embeddings:
+                    continue
+                # sparse_sum: (batch_size, embedding_dim)
+                sparse_sum = sparse_sum + self.sparse_embeddings[name](x)
+            sparse_ctx_embed = self.sparse_ctx_embed_ln(sparse_sum)
+            ctx_embed = (
+                sparse_ctx_embed
+                if ctx_embed is None
+                else (ctx_embed + sparse_ctx_embed)
+            )
+
+        # 2) dense
+        if (
+            feature_dense
+            and self.dense_projector is not None
+            and self.dense_total_dim > 0
+        ):
+            dense_parts = []
+            for name in self.feature_dense_dims.keys():
+                if feature_dense is None or name not in feature_dense:
+                    continue
+                x = feature_dense[name]
+                if x.dim() == 1:
+                    x = x.unsqueeze(-1)
+                dense_parts.append(x.float())
+            # dense_concat: # (batch_size, dense_total_dim)
+            dense_concat = torch.cat(dense_parts, dim=-1)
+
+            # dense_ctx_embed: (batch_size, embedding_dim)
+            dense_ctx_embed = self.dense_projector(dense_concat)
+            ctx_embed = (
+                dense_ctx_embed if ctx_embed is None else (ctx_embed + dense_ctx_embed)
+            )
+
+        if ctx_embed is not None:
+            # ctx_embed: (batch_size, embedding_dim)
+            ctx_embed = self.nonseq_ctx_embed_ln(ctx_embed)
+            # x_embed: (batch_size, seq_len, embedding_dim)
+            x_embed = x_embed + ctx_embed.unsqueeze(1)
 
         # -----------------------------------------------
         # Action Weight 적용 (합산된 임베딩에 곱셈)
@@ -495,13 +607,17 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # experts (TransformerExpert)
         # -----------------------------------------------
-        # 1) 먼저 각 target의 gate_logits (timestep-wise) 계산 및 top-k 인덱스 저장
+        # 1) 먼저 각 target의 gate_logits (timestep-wise) 계산
+        #    - top_k == n_experts인 경우: top-k 인덱스 계산 및 마스킹을 생략
+        #    - top_k < n_experts인 경우: top-k 인덱스를 저장해 이후 마스킹에 사용
         gate_logits_per_target = {}
-        topk_idx_per_target = {}
-        k = min(self.top_k, self.n_experts)
+
+        use_topk = self.top_k < self.n_experts
+        topk_idx_per_target = {} if use_topk else None
+
         for target_name in self.targets:
             # gate_logits: (batch_size, seq_len, n_experts)
-            gate_logits = self.gates[target_name](shared_seq)
+            gate_logits = self.gates[target_name](self.gate_ln(shared_seq))
 
             # padding timestep은 gating 대상에서 제외
             # pad_mask: (batch_size, seq_len, 1)
@@ -513,13 +629,13 @@ class MultiTaskMoESequenceTransformer(nn.Module):
                 neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
 
             gate_logits = gate_logits.masked_fill(pad_mask, neg_inf)
-
-            # timestep별 top-k expert 선택
-            # idx: (batch_size, seq_len, k)
-            _, idx = gate_logits.topk(k, dim=-1)
-
             gate_logits_per_target[target_name] = gate_logits
-            topk_idx_per_target[target_name] = idx
+
+            # top_k를 사용할 때만 top-k expert 선택
+            if use_topk:
+                # idx: (batch_size, seq_len, k)
+                _, idx = gate_logits.topk(self.top_k, dim=-1)
+                topk_idx_per_target[target_name] = idx
 
         # -------------------------------------------------
         # (옵션) top-k union만 expert 계산하는 sparse compute 아이디어
@@ -571,32 +687,38 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         for target_name in self.targets:
             gate_logits = gate_logits_per_target[target_name]
 
-            # top-k 인덱스 (batch_size, seq_len, n_experts)
-            topk_idx = topk_idx_per_target[target_name]
+            # 4) temperature softmax 준비
+            temp = self.gate_temp_min + (
+                self.gate_temp_max - self.gate_temp_min
+            ) * torch.sigmoid(self.gate_temperature)
 
-            # 1) top-k mask 생성
-            # topk_mask: (batch_size, seq_len, n_experts)
-            topk_mask = torch.zeros_like(gate_logits, dtype=torch.bool)
-            topk_mask = topk_mask.scatter_(-1, topk_idx, True)
+            if use_topk:
+                # sparse routing: top-k만 남기고 나머지는 -inf
+                topk_idx = topk_idx_per_target[target_name]
 
-            # 2) padding timestep은 gating 대상에서 제외
-            # masks: (batch_size, seq_len) -> (batch_size, seq_len, 1)
-            pad_mask = masks.unsqueeze(-1)
-            topk_mask = topk_mask & (~pad_mask)
+                # 1) top-k mask 생성
+                # topk_mask: (batch_size, seq_len, n_experts)
+                topk_mask = torch.zeros_like(gate_logits, dtype=torch.bool)
+                topk_mask = topk_mask.scatter_(-1, topk_idx, True)
 
-            # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함
-            # - 이렇게 하면 top-k만 섞는 sparse routing이 강제됨
-            neg_inf = -1e9
-            if gate_logits.dtype == torch.float16:
-                # fp16에서 -1e9가 overflow될 수 있어 dtype 기반으로 안전하게 처리
-                neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
-            sparse_logits = gate_logits.masked_fill(~topk_mask, neg_inf)
+                # 2) padding timestep은 gating 대상에서 제외
+                # masks: (batch_size, seq_len) -> (batch_size, seq_len, 1)
+                pad_mask = masks.unsqueeze(-1)
+                topk_mask = topk_mask & (~pad_mask)
 
-            # 4) temperature softmax
-            # - `gate_temperature`가 너무 작아지면 분포가 과하게 샤프해질 수 있어 clamp 처리
-            temp = torch.clamp(self.gate_temperature, min=0.01)
-            # gate_weights: (batch_size, seq_len, n_experts)
-            gate_weights = torch.softmax(sparse_logits / temp, dim=-1)
+                # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함
+                # - 이렇게 하면 top-k만 섞는 sparse routing이 강제됨
+                neg_inf = -1e9
+                if gate_logits.dtype == torch.float16:
+                    # fp16에서 -1e9가 overflow될 수 있어 dtype 기반으로 안전하게 처리
+                    neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
+                sparse_logits = gate_logits.masked_fill(~topk_mask, neg_inf)
+
+                # gate_weights: (batch_size, seq_len, n_experts)
+                gate_weights = torch.softmax(sparse_logits / temp, dim=-1)
+            else:
+                # dense routing: 모든 expert를 그대로 사용 (top-k 마스킹 생략)
+                gate_weights = torch.softmax(gate_logits / temp, dim=-1)
 
             # 5) fused_seq = Σ_k gate_weight_k * expert_out_k
             # gate_expand: (batch_size, seq_len, n_experts, 1)
@@ -620,9 +742,4 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             logits = head(fused_res)
             y_outputs[target_name] = logits
 
-        # -----------------------------------------------
-        # sequence vector (as user vector)
-        # -----------------------------------------------
-        # sequence_vector: (batch_size, embedding_dim)
-
-        return sequence_vector, y_outputs
+        return {"sequence_vector": sequence_vector, "y_outputs": y_outputs}
