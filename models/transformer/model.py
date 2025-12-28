@@ -105,7 +105,7 @@ class Model:
 
         inputs = body.get("inputs", {})
 
-        feature_sequences = {}
+        feature_sequence = {}
         for i, (key, values) in enumerate(inputs.items()):
             # -----------------------------------------------
             # feature 정수 인코딩
@@ -132,7 +132,7 @@ class Model:
                 seq = seq[: self.seq_model.seq_len]
 
             # torch Tensor로 변환 (shape: [1, seq_len])
-            feature_sequences[key] = (
+            feature_sequence[key] = (
                 torch.from_numpy(np.array(seq, dtype=np.int32))
                 .reshape(1, self.seq_model.seq_len)
                 .to(self.device)
@@ -154,7 +154,7 @@ class Model:
         )
 
         # 최종 입력 포맷 구성
-        body["inputs"] = {"feature_sequences": feature_sequences, "masks": masks}
+        body["inputs"] = {"feature_sequence": feature_sequence, "masks": masks}
 
         return body
 
@@ -194,7 +194,9 @@ class Model:
             }
             with torch.no_grad():
                 self.seq_model.eval()
-                seq_vector, y_preds = self.seq_model(**data["inputs"])
+                outputs = self.seq_model(**data["inputs"])
+                seq_vector = outputs["sequence_vector"]
+                y_preds = outputs["y_outputs"]
 
             # feature별 예측값 처리
             for target, dim in self.seq_model_config["output_dims"].items():

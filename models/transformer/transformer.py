@@ -171,7 +171,7 @@ class MultiTaskSequenceTransformer(nn.Module):
 
     def forward(
         self,
-        feature_sequences: Dict[str, torch.Tensor],
+        feature_sequence: Dict[str, torch.Tensor],
         action_sequence: torch.Tensor = None,
         masks: Union[List[torch.Tensor], torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -186,7 +186,7 @@ class MultiTaskSequenceTransformer(nn.Module):
         5) pooling -> user representation
         6) task tower를 통해 각 task 예측
 
-        :param feature_sequences: {feature_name: 시퀀스 텐서}
+        :param feature_sequence: {feature_name: 시퀀스 텐서}
         :param action_sequence: (선택) 행동 시퀀스 텐서
         :param masks: padding mask (batch_size, seq_len)
         :return:
@@ -204,7 +204,7 @@ class MultiTaskSequenceTransformer(nn.Module):
         # (batch_size, seq_len, embedding_dim)
         x_embed = sum(
             self.embeddings[feature_name](x)
-            for feature_name, x in feature_sequences.items()
+            for feature_name, x in feature_sequence.items()
         )
 
         # -----------------------------------------------

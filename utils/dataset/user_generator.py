@@ -28,7 +28,7 @@ def generate_users(
     :return: 유저 메타데이터 DataFrame (user_id, age, gender)
     """
     if num_users <= 0:
-        return pd.DataFrame(columns=["user_id", "age", "gender"])
+        return pd.DataFrame(columns=["user_id", "user_age", "user_gender"])
 
     rng = np.random.default_rng(seed)  # 난수 생성 (재현성 보장)
 
@@ -83,8 +83,8 @@ def generate_users(
     df = pd.DataFrame(
         {
             "user_id": np.arange(1, num_users + 1, dtype=int),
-            "age": ages.astype(int),
-            "gender": genders_sampled,
+            "user_age": ages.astype(int),
+            "user_gender": genders_sampled,
         }
     )
     return df
