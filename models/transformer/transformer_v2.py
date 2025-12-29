@@ -88,7 +88,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         expert_layers: int = 1,
         expert_nhead: int = 1,
         top_k: int = None,
-        gate_input: Literal["timestep", "sequence"] = "timestep",
         # ---------- non-sequential feature ---------- #
         feature_sparse_dims: Optional[Dict[str, int]] = None,
         feature_dense_dims: Optional[Dict[str, int]] = None,
@@ -139,13 +138,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         :param top_k:
             gating에서 상위 k개의 expert만 사용하도록 강제하는 sparsity 옵션
             - k가 작을수록 계산을 줄이고 분업을 강제
-
-        :param gate_input:
-            gate 입력 모드
-            - "timestep": 각 timestep마다 expert를 gating
-                - 시퀀스 길이가 길거나 다양할 때 선택하여 각 timestep 별로 Expert 라우팅을 수행
-            - "sequence": 전체 sequence를 하나의 feature로 인식하여 expert를 gating
-                - 시퀀스 길이가 짧을 땐 Expert 라우팅 안정성을 강화할 수 있음
         """
 
         super().__init__()
@@ -157,11 +149,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         self.seq_len = seq_len
         self.global_pool = global_pool
         self.embedding_dim = embedding_dim
-
-        # Gate 입력 방식
-        if gate_input not in ["timestep", "sequence"]:
-            raise ValueError("gate_input must be 'timestep' or 'sequence'.")
-        self.gate_input = gate_input
 
         # TransformerExpert의 head 수
         self.expert_nhead = expert_nhead
@@ -278,8 +265,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Task-wise Gates
-        # - gate 입력은 `gate_input`이 "timestep"냐, "sequence"이냐에 따라 달라짐.
-        # - "timestep"이면 `shared_seq`를 사용하고, "sequence"면 `sequence_vector`를 사용함.
         # -----------------------------------------------
         self.gates = nn.ModuleDict(
             {
@@ -634,39 +619,29 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         use_topk = self.top_k < self.n_experts
         topk_idx_per_target = {} if use_topk else None
 
-        # gate input 선택
-        if self.gate_input == "timestep":
-            # (batch_size, seq_len, embedding_dim)
-            gate_in = self.gate_ln(shared_seq)
-        else:
-            # (batch_size, embedding_dim) -> (batch_size, 1, embedding_dim)로 만들어서 이후 로직(shape)을 통일
-            gate_in = self.gate_ln(sequence_vector).unsqueeze(1)
+        # gate_in: (batch_size, seq_len, embedding_dim)
+        gate_in = self.gate_ln(shared_seq)
 
         for target_name in self.targets:
 
-            # gate_logits:
-            # - "timestep" 적용 시 (batch_size, seq_len, n_experts)
-            # - "sequence" 적용 시 (batch_size, 1, n_experts)
+            # gate_logits: (batch_size, seq_len, n_experts)
             gate_logits = self.gates[target_name](gate_in)
 
-            # padding 위치는 gating 대상에서 제외 ("timestep" 적용 시만)
-            if self.gate_input == "timestep":
-                # pad_mask: (batch_size, seq_len, 1)
-                pad_mask = masks.unsqueeze(-1)
+            # padding 위치는 gating 대상에서 제외
+            # pad_mask: (batch_size, seq_len, 1)
+            pad_mask = masks.unsqueeze(-1)
 
-                # dtype-safe -inf
-                neg_inf = -1e9
-                if gate_logits.dtype == torch.float16:
-                    neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
-                gate_logits = gate_logits.masked_fill(pad_mask, neg_inf)
+            # dtype-safe -inf
+            neg_inf = -1e9
+            if gate_logits.dtype == torch.float16:
+                neg_inf = -torch.finfo(gate_logits.dtype).max / 2.0
+            gate_logits = gate_logits.masked_fill(pad_mask, neg_inf)
 
             gate_logits_per_target[target_name] = gate_logits
 
             # top_k를 사용할 때만 top-k expert 선택
             if use_topk:
-                # idx:
-                # "timestep" 적용 시 (batch_size, seq_len, k)
-                # "sequence" 적용 시 (batch_size, 1, k)
+                # idx: (batch_size, seq_len, k)
                 _, idx = gate_logits.topk(self.top_k, dim=-1)
                 topk_idx_per_target[target_name] = idx
 
@@ -724,7 +699,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             # temp = self.gate_temp_min + (
             #     self.gate_temp_max - self.gate_temp_min
             # ) * torch.sigmoid(self.gate_temperature)
-            temp = 1
+            temp = 1.0
 
             if use_topk:
                 # sparse routing: top-k만 남기고 나머지는 -inf
@@ -735,11 +710,10 @@ class MultiTaskMoESequenceTransformer(nn.Module):
                 topk_mask = torch.zeros_like(gate_logits, dtype=torch.bool)
                 topk_mask = topk_mask.scatter_(-1, topk_idx, True)
 
-                # 2) padding 위치는 gating 대상에서 제외 (단, "timestep" 적용 시에만)
-                if self.gate_input == "timestep":
-                    # masks: (batch_size, seq_len) -> (batch_size, seq_len, 1)
-                    pad_mask = masks.unsqueeze(-1)
-                    topk_mask = topk_mask & (~pad_mask)
+                # 2) padding 위치는 gating 대상에서 제외
+                # masks: (batch_size, seq_len) -> (batch_size, seq_len, 1)
+                pad_mask = masks.unsqueeze(-1)
+                topk_mask = topk_mask & (~pad_mask)
 
                 # 3) top-k가 아닌 expert는 -inf로 보내 softmax 확률이 0에 수렴하게 함
                 # - 이렇게 하면 top-k만 섞는 sparse routing이 강제됨
@@ -754,13 +728,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
                 # 모든 expert를 그대로 사용 (top-k 마스킹 생략)
                 gate_weights = torch.softmax(gate_logits / temp, dim=-1)
 
-            # gate_weights:
-            # "timestep" -> (batch_size, seq_len, n_experts)
-            # "sequence" -> (batch_size, 1, n_experts)
-
-            if self.gate_input == "sequence":
-                # "sequence" 적용 시 (batch_size, seq_len, n_experts)로 broadcast 필요
-                gate_weights = gate_weights.expand(-1, expert_stack.size(1), -1)
+            # gate_weights: (batch_size, seq_len, n_experts)
 
             # 5) fused_seq = Σ_k gate_weight_k * expert_out_k
             # gate_expand: (batch_size, seq_len, n_experts, 1)
