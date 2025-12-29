@@ -83,7 +83,7 @@ def get_user_logs(user_id: int) -> pd.DataFrame:
     """
     return (
         df_user_logs[df_user_logs["user_id"] == user_id]
-        .drop(columns=["user_id", "age"])
+        .drop(columns=["user_id", "user_age"])
         .sort_values("timestamp", ascending=False, ignore_index=True)
     )
 
@@ -197,12 +197,28 @@ def predict_transformer(
         "usage",
         "year",
     ]
-    inputs = df_item_info[input_columns].to_dict(orient="list")
+    feature_sequence = df_item_info[input_columns].to_dict(orient="list")
     if actions:
-        inputs["action"] = actions
+        feature_sequence["action"] = actions
 
-    # 입력: user_id & 상품 시퀀스
-    body = {"input_data": [{"user_id": user_id, "inputs": inputs}]}
+    df_user_feature = get_user_info(user_id=user_id)
+    feature_sparse = {
+        "user_age": df_user_feature["user_age"].item(),
+        "user_gender": df_user_feature["user_gender"].item(),
+    }
+
+    # 입력: User Feature & 상품 시퀀스
+    body = {
+        "input_data": [
+            {
+                "user_id": user_id,
+                "inputs": {
+                    "feature_sequence": feature_sequence,
+                    "feature_sparse": feature_sparse,
+                },
+            }
+        ]
+    }
 
     # REST API 호출 -> JSON 응답 획득
     response = requests.post(url, json=body)
@@ -288,8 +304,8 @@ if USER_ID != "":
     with st.container(border=True):
         cols = st.columns(3)
         cols[0].metric("USER ID", USER_ID)
-        cols[1].metric("AGE", user_info["age"].item())
-        cols[2].metric("GENDER", user_info["gender"].item())
+        cols[1].metric("AGE", user_info["user_age"].item())
+        cols[2].metric("GENDER", user_info["user_gender"].item())
 
         with st.expander("탐색 및 구매 이력"):
             st.write(df_user_history)
