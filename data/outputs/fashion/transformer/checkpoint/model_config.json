@@ -1,6 +1,6 @@
 {
     "seq_len": 5,
-    "feature_dims": {
+    "feature_sequence_dims": {
         "brand_name": 354,
         "gender": 7,
         "age_group": 8,
@@ -15,6 +15,11 @@
         "occasion": 15,
         "action": 6
     },
+    "feature_sparse_dims": {
+        "user_age": 45,
+        "user_gender": 4
+    },
+    "feature_dense_dims": {},
     "action_weights": {
         "3": 1,
         "5": 2,
@@ -36,5 +41,5 @@
         "fit": 9,
         "occasion": 15
     },
-    "global_pool": "sum"
+    "global_pool": "att"
 }
