@@ -171,7 +171,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -------------------------------------------------
         # Top-K Gating
-        # - 원래 의도는 전체 expert 개수 보다 적은 개수만 gating에 사용하는 것
+        # - 원래 의도는 전체 expert 개수 보다 적은 개수만 gating에 사용하는 것.
         # - 그런데 expert가 8개 이하로 적을 때는 오히려 전체를 사용하는 게 학습 안정성이 높을 수 있으므로,
         # - 'top_k'가 None이면 전체 expert를 사용함.
         # -------------------------------------------------
@@ -199,8 +199,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # 입력 feature 구성
-        # - feature_sequence_dims에 "action"이 있어도 token embedding feature에서는 제외
-        # - action은 별도 `action_sequence`로 처리
+        # - feature_sequence_dims에 "action"이 있어도 token embedding feature에서는 제외.
+        # - action은 별도 `action_sequence`로 처리.
         # -----------------------------------------------
         self.features = [k for k in feature_sequence_dims.keys() if k != "action"]
 
@@ -222,7 +222,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # -----------------------------------------------
         # Action Weight Lookup (고정 가중치)
         # - action_sequence: (batch_size, seq_len) 형태로 들어오고,
-        #   각 timestep의 action id -> weight로 매핑해서 (batch_size, seq_len, 1) weight tensor를 생성
+        #   각 timestep의 action id -> weight로 매핑해서 (batch_size, seq_len, 1) weight tensor를 생성.
         # -----------------------------------------------
         self.action_weights = action_weights or {}
         if self.action_weights:
@@ -230,7 +230,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
             lookup = torch.ones(max_action_id + 1, dtype=torch.float32)
             for k, v in self.action_weights.items():
                 lookup[int(k)] = float(v)
-            # register_buffer: to(device) 시 같이 이동, optimizer 업데이트는 하지 않음
+            # register_buffer: to(device) 시 같이 이동, optimizer 업데이트는 하지 않음.
             self.register_buffer("action_lookup", lookup)
         else:
             self.action_lookup = None
@@ -244,8 +244,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Shared Transformer Encoder
-        # - 모든 feature를 합친 `x_embed`를 한 번에 인코딩
-        # - behavior sequence transformer처럼 공유된 sequence representation을 생성
+        # - 모든 feature를 합친 `x_embed`를 한 번에 인코딩.
+        # - behavior sequence transformer처럼 공유된 sequence representation을 생성.
         # -----------------------------------------------
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
@@ -262,7 +262,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # Experts (Transformer-based)
         # - expert 입력: `shared_seq` (batch_size, seq_len, embedding_dim)
         # - expert 출력: `expert_out` (batch_size, seq_len, embedding_dim)
-        # - expert_stack: (batch_size, seq_len, n_experts, embedding_dim) 로 쌓아서 gating으로 mixture 생성
+        # - expert_stack: (batch_size, seq_len, n_experts, embedding_dim) 로 쌓아서 gating으로 mixture 생성.
         # -----------------------------------------------
         self.experts = nn.ModuleList(
             [
@@ -278,11 +278,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Task-wise Gates
-        # - gate 입력은 `shared_seq`를 사용 (timestep-wise)
-        # - gate(shared_seq[t]) -> 각 timestep마다 expert mixture 비율이 달라질 수 있음
-        # - 유저가 지금 보는 아이템이 어떤 성격인지에 따라 expert를 다르게 쓰게 하는 의도
-        # - 입력: (batch_size, embedding_dim)
-        # - 출력: (batch_size, n_experts)
+        # - gate 입력은 `gate_input`이 "timestep"냐, "sequence"이냐에 따라 달라짐.
+        # - "timestep"이면 `shared_seq`를 사용하고, "sequence"면 `sequence_vector`를 사용함.
         # -----------------------------------------------
         self.gates = nn.ModuleDict(
             {
@@ -293,9 +290,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Task-specific Towers (adapter + shallow head)
-        # - tower를 큰 Transformer로 두지 않고,
-        #   adapter: (E -> r -> E) residual 미세조정
-        #   head: layernorm + MLP로 logits 생성
+        #  - adapter: (E -> r -> E) residual 미세조정
+        #  - head: layernorm + MLP로 logits 생성
         # -----------------------------------------------
         adapter_rank = max(16, self.embedding_dim // 8)
         head_hidden = max(self.embedding_dim // 2, 32)
@@ -316,8 +312,8 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # Adapter initialization & scaling
-        # - adapter를 residual로 더할 때 폭주하지 않도록
-        # - up projection을 매우 작은 std로 초기화하는 패턴
+        # - adapter를 residual로 더할 때 폭주하지 않도록,
+        # - up projection을 매우 작은 std로 초기화하는 패턴.
         # -----------------------------------------------
         for target_name, module in self.towers.items():
             adapter = module["adapter"]
@@ -402,7 +398,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         if masks.dtype != torch.bool:
             masks = masks.to(torch.bool)
 
-        # lookup이 없으면 전부 1.0 (원래 동작)
+        # lookup이 없으면 전부 1.0 고정.
         if not hasattr(self, "action_lookup") or self.action_lookup is None:
             return torch.ones(
                 (action_sequence.size(0), action_sequence.size(1), 1),
@@ -410,12 +406,12 @@ class MultiTaskMoESequenceTransformer(nn.Module):
                 dtype=dtype,
             )
 
-        # 로컬 복사본을 action_sequence와 같은 device로 맞춤
+        # 로컬 복사본을 action_sequence와 같은 device로 맞춤.
         action_lookup = self.action_lookup
         if action_lookup.device != action_sequence.device:
             action_lookup = action_lookup.to(action_sequence.device)
 
-        # action id가 lookup 범위를 넘으면 로컬로 확장 (forward 내에서만)
+        # action id가 lookup 범위를 넘으면 로컬로 확장. (forward 내에서만)
         max_id_in_batch = int(action_sequence.max().item())
         if max_id_in_batch >= action_lookup.size(0):
             new_lookup = torch.ones(
@@ -431,7 +427,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         # weights: (batch_size, seq_len, 1)
         weights = action_lookup[action_sequence.long()].to(dtype=dtype).unsqueeze(-1)
 
-        # padding 위치는 embedding 곱에서 왜곡 방지용으로 1.0 고정
+        # padding 위치는 embedding 곱에서 왜곡 방지용으로 1.0 고정.
         weights = weights.masked_fill(masks.unsqueeze(-1), 1.0)
 
         return weights
@@ -446,7 +442,7 @@ class MultiTaskMoESequenceTransformer(nn.Module):
         """
 
         if self.global_pool == "last":
-            # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch,)
+            # 각 배치의 마지막 유효 토큰 인덱스 계산 (batch_size,)
             valid_mask = (~masks).unsqueeze(-1).float()
             masked_x = x * valid_mask
             # 음수 방지
@@ -623,8 +619,6 @@ class MultiTaskMoESequenceTransformer(nn.Module):
 
         # -----------------------------------------------
         # pooling -> sequence representation
-        # - gate가 timestep-wise이긴 하지만,
-        # - 모델 전체를 대표하는 user vector가 필요해서 pooling 결과를 별도로 만듦.
         # -----------------------------------------------
         # sequence_vector: (batch_size, embedding_dim)
         sequence_vector = self._apply_pooling(shared_seq, masks)
