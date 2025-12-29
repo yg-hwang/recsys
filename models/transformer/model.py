@@ -49,11 +49,16 @@ class Model:
 
         # feature별 LabelEncoder 로드
         self.encoder = {
-            feature: joblib.load(
-                self.seq_model_dir.joinpath(f"label_encoders/{feature}.joblib")
+            feature_name: joblib.load(
+                self.seq_model_dir.joinpath(f"label_encoders/{feature_name}.joblib")
             )
-            for feature in self.seq_model_config["feature_dims"].keys()
+            for feature_name in self.seq_model_config["feature_sequence_dims"].keys()
         }
+        if "feature_sparse_dims" in self.seq_model_config:
+            for feature_name in self.seq_model_config["feature_sparse_dims"].keys():
+                self.encoder[feature_name] = joblib.load(
+                    self.seq_model_dir.joinpath(f"label_encoders/{feature_name}.joblib")
+                )
 
         # -----------------------------------------------
         # Model: Regressor
@@ -84,18 +89,24 @@ class Model:
         {
             "user_id": 123,
             "inputs": {
-                "brand_name":      ["Myntra", "FILA", "Quiksilver", "Proline"],
-                "gender":          ["Men", "Men", "Men", "Men"],
-                "age_group":       ["Adults-Men", "Adults-Men", "Adults-Men", "Adults-Men"],
-                "base_color":      ["Red", "Navy Blue", "Black", "Red"],
-                "season":          ["Summer", "Summer", "Summer", "Summer"],
-                "year":            ["2012", "2012", "2012", "2012"],
-                "usage":           ["Casual", "Casual", "Casual", "Casual"],
-                "master_category": ["Apparel", "Apparel", "Apparel", "Apparel"],
-                "sub_category":    ["Topwear", "Topwear", "Topwear", "Topwear"],
-                "article_type":    ["Tshirts", "Tshirts", "Tshirts", "Tshirts"],
-                "fit":             ["Regular Fit", "Regular Fit", "Regular Fit", "Regular Fit"],
-                "occasion":        ["<UNK>", "Casual", "Casual", "Casual"]
+                "feature_sparse": {
+                    "user_age": 30,
+                    "user_gender": "Men",
+                },
+                "feature_sequence": {
+                    "brand_name":      ["Myntra", "FILA", "Quiksilver", "Proline"],
+                    "gender":          ["Men", "Men", "Men", "Men"],
+                    "age_group":       ["Adults-Men", "Adults-Men", "Adults-Men", "Adults-Men"],
+                    "base_color":      ["Red", "Navy Blue", "Black", "Red"],
+                    "season":          ["Summer", "Summer", "Summer", "Summer"],
+                    "year":            ["2012", "2012", "2012", "2012"],
+                    "usage":           ["Casual", "Casual", "Casual", "Casual"],
+                    "master_category": ["Apparel", "Apparel", "Apparel", "Apparel"],
+                    "sub_category":    ["Topwear", "Topwear", "Topwear", "Topwear"],
+                    "article_type":    ["Tshirts", "Tshirts", "Tshirts", "Tshirts"],
+                    "fit":             ["Regular Fit", "Regular Fit", "Regular Fit", "Regular Fit"],
+                    "occasion":        ["<UNK>", "Casual", "Casual", "Casual"]
+                }
             }
         }
 
@@ -105,8 +116,10 @@ class Model:
 
         inputs = body.get("inputs", {})
 
+        print(inputs)
+
         feature_sequence = {}
-        for i, (key, values) in enumerate(inputs.items()):
+        for i, (key, values) in enumerate(inputs["feature_sequence"].items()):
             # -----------------------------------------------
             # feature 정수 인코딩
             # -----------------------------------------------
@@ -153,18 +166,33 @@ class Model:
             .to(self.device)
         )
 
+        feature_sparse = {}
+        for k, v in inputs["feature_sparse"].items():
+            try:
+                # 학습 시 사용된 LabelEncoder로 인코딩
+                v_encoded = self.encoder[k].transform([v]).item()
+            except Exception as e:
+                # 학습 시 등장하지 않은 값(unseen)은 "<UNK>"로 대체
+                print(f"`{e} ({k})")
+                v_encoded = self.encoder[k].transform(["<UNK>"]).item()
+            feature_sparse[k] = torch.tensor(v_encoded).to(self.device).unsqueeze(0)
+
         # 최종 입력 포맷 구성
-        body["inputs"] = {"feature_sequence": feature_sequence, "masks": masks}
+        body["inputs"] = {
+            "feature_sequence": feature_sequence,
+            "masks": masks,
+            "feature_sparse": feature_sparse,
+        }
 
         return body
 
     def predict(self, input_data: List[Dict[str, any]]) -> List[Dict[str, any]]:
         """
         예측 수행
-        1) `preprocess()`를 통해 Transformer 입력 형태로 변환
-        2) 시퀀스 벡터 + feature별 예측값 출력
-        3) feature별 예측값은 LabelEncoder.inverse_transform으로 복원
-        4) 시퀀스 벡터를 projection 모델에 입력해 item 벡터 추출
+        1) `preprocess()`를 통해 모델 입력 형태로 변환
+        2) 시퀀스 벡터 + 예측값 출력
+        3) 예측값은 LabelEncoder.inverse_transform으로 복원
+        4) 시퀀스 벡터를 projection 모델에 입력해 상품 벡터 예측
         5) 최종 결과 반환
 
         ---------- 출력 예시 ----------
@@ -187,18 +215,18 @@ class Model:
             data = self.preprocess(body=d)
 
             # -----------------------------------------------
-            # Transformer 기반 예측
+            # 모델 예측
             # -----------------------------------------------
+            with torch.no_grad():
+                self.seq_model.eval()
+                response = self.seq_model(**data["inputs"])
+                seq_vector = response["sequence_vector"]
+                y_preds = response["y_outputs"]
+
+            # feature별 예측값 처리
             outputs = {
                 target: {} for target in self.seq_model_config["output_dims"].keys()
             }
-            with torch.no_grad():
-                self.seq_model.eval()
-                outputs = self.seq_model(**data["inputs"])
-                seq_vector = outputs["sequence_vector"]
-                y_preds = outputs["y_outputs"]
-
-            # feature별 예측값 처리
             for target, dim in self.seq_model_config["output_dims"].items():
                 # y_pred: (seq_len, batch_size, n_classes)
                 y_pred = y_preds[target]

@@ -74,8 +74,8 @@ class MultiTaskSequenceTransformer(nn.Module):
         # (범주형 feature를 embedding_dim 차원 dense vector로 변환)
         self.embeddings = nn.ModuleDict(
             {
-                name: EmbeddingLayer(n_classes, embedding_dim)
-                for name, n_classes in feature_dims.items()
+                feature_name: EmbeddingLayer(n_classes, embedding_dim)
+                for feature_name, n_classes in feature_dims.items()
             }
         )
 
