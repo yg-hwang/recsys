@@ -232,7 +232,7 @@ class SequenceGeneratorPandas:
         self,
         data: pd.DataFrame,
         feature_sequence: List[str],
-        feature_nonsequences: List[str] = None,
+        feature_nonsequence: List[str] = None,
         output_targets: List[str] = None,
     ) -> pd.DataFrame:
         """
@@ -242,7 +242,7 @@ class SequenceGeneratorPandas:
 
         :param data: 입력 DataFrame (user_id, item_id, timestamp 포함)
         :param feature_sequence: 시퀀스로 만들 feature 컬럼 리스트
-        :param feature_nonsequences: 그 외 Dense 혹은 Sparse feature 컬럼 리스트
+        :param feature_nonsequence: 그 외 Dense 혹은 Sparse feature 컬럼 리스트
         :param output_targets: Target Label로 사용할 feature 컬럼 리스트
         """
 
@@ -257,7 +257,7 @@ class SequenceGeneratorPandas:
         total_skipped = 0  # skip된 시퀀스 수 카운트
 
         # (3) 유저별 시퀀스 생성 함수 (마지막 짧은 건 skip)
-        def make_sequences(x: pd.Series) -> list:
+        def make_sequence(x: pd.Series) -> list:
             nonlocal total_skipped
             seqs = []
             n = len(x)
@@ -277,7 +277,7 @@ class SequenceGeneratorPandas:
             # 입력 시퀀스 생성
             df_seq = (
                 data.groupby(self.user_id)[col_name]
-                .apply(make_sequences)
+                .apply(make_sequence)
                 .explode()
                 .reset_index(level=0, drop=True)
             ).apply(list)
@@ -303,7 +303,7 @@ class SequenceGeneratorPandas:
 
                 df_tgt = (
                     data.groupby(self.user_id)[shifted_col]
-                    .apply(make_sequences)
+                    .apply(make_sequence)
                     .explode()
                     .reset_index(level=0, drop=True)
                 ).apply(list)
@@ -328,12 +328,12 @@ class SequenceGeneratorPandas:
         self.targets.append(f"y_{self.item_id}")
 
         # (6) 최종 컬럼 정리
-        if feature_nonsequences is not None:
-            data_output = pd.concat([data_output, data[feature_nonsequences]], axis=1)
+        if feature_nonsequence is not None:
+            data_output = pd.concat([data_output, data[feature_nonsequence]], axis=1)
             columns = (
                 [self.user_id, "user_rn", "seq_len", "mask"]
                 + self.features
-                + feature_nonsequences
+                + feature_nonsequence
                 + self.targets
             )
         else:
@@ -360,7 +360,7 @@ class SequenceGeneratorPandas:
         )
 
         logging.info(
-            f"[SequenceGenerator] Skipped {total_skipped} short sequences (< {self.max_seq_len})"
+            f"[SequenceGenerator] Skipped {total_skipped} short sequence (< {self.max_seq_len})"
         )
 
         return data_output
@@ -382,7 +382,7 @@ class SequentialDataset(Dataset):
         (DataLoader에서 batch 단위 텐서 추출 가능)
 
         :param df: 시퀀스 데이터셋 (SequenceGenerator 결과)
-        :param feature_sequence: 입력 feature로 사용할 컬럼명
+        :param feature_sequence: 입력 feature로 사용할 컬럼명 (범주형 feature를 전제)
         :param feature_sparse: 범주형(Sparse) 단일 feature 컬럼명
         :param feature_dense: 수치형(Dense) 단일 feature 컬럼명
         :param action_sequence: 행동 가중치로 사용할 컬럼명

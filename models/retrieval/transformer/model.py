@@ -17,7 +17,7 @@ class Model:
         padding_value: int = 0,
     ):
         """
-        :param seq_model_dir: 트랜스포머 기반 시퀀스 학습 모델
+        :param seq_model_dir: 시퀀스 학습 모델
         :param reg_model_dir: 시퀀스 to 상품 벡터 Projection 학습 모델
         :param padding_value: 시퀀스 패딩 값
         """
@@ -52,7 +52,9 @@ class Model:
             feature_name: joblib.load(
                 self.seq_model_dir.joinpath(f"label_encoders/{feature_name}.joblib")
             )
-            for feature_name in self.seq_model_config["feature_sequence_dims"].keys()
+            for feature_name in self.seq_model_config[
+                "feature_sequence_sparse_dims"
+            ].keys()
         }
         if "feature_sparse_dims" in self.seq_model_config:
             for feature_name in self.seq_model_config["feature_sparse_dims"].keys():
@@ -93,7 +95,7 @@ class Model:
                     "user_age": 30,
                     "user_gender": "Men",
                 },
-                "feature_sequence": {
+                "feature_sequence_sparse": {
                     "brand_name":      ["Myntra", "FILA", "Quiksilver", "Proline"],
                     "gender":          ["Men", "Men", "Men", "Men"],
                     "age_group":       ["Adults-Men", "Adults-Men", "Adults-Men", "Adults-Men"],
@@ -118,8 +120,8 @@ class Model:
 
         print(inputs)
 
-        feature_sequence = {}
-        for i, (key, values) in enumerate(inputs["feature_sequence"].items()):
+        feature_sequence_sparse = {}
+        for i, (key, values) in enumerate(inputs["feature_sequence_sparse"].items()):
             # -----------------------------------------------
             # feature 정수 인코딩
             # -----------------------------------------------
@@ -145,13 +147,15 @@ class Model:
                 seq = seq[: self.seq_model.seq_len]
 
             # torch Tensor로 변환 (shape: [1, seq_len])
-            feature_sequence[key] = (
+            feature_sequence_sparse[key] = (
                 torch.from_numpy(np.array(seq, dtype=np.int32))
                 .reshape(1, self.seq_model.seq_len)
                 .to(self.device)
             )
 
-        input_seq_len = max([len(v) for k, v in inputs.items()])
+        seq_dict = inputs["feature_sequence_sparse"]
+        some_key = next(iter(seq_dict.keys()))
+        input_seq_len = len(seq_dict[some_key])
         masks = [0] * input_seq_len
         # -----------------------------------------------
         # mask도 동일하게 padding, truncation 적용
@@ -167,19 +171,20 @@ class Model:
         )
 
         feature_sparse = {}
-        for k, v in inputs["feature_sparse"].items():
-            try:
-                # 학습 시 사용된 LabelEncoder로 인코딩
-                v_encoded = self.encoder[k].transform([v]).item()
-            except Exception as e:
-                # 학습 시 등장하지 않은 값(unseen)은 "<UNK>"로 대체
-                print(f"`{e} ({k})")
-                v_encoded = self.encoder[k].transform(["<UNK>"]).item()
-            feature_sparse[k] = torch.tensor(v_encoded).to(self.device).unsqueeze(0)
+        if "feature_sparse" in inputs:
+            for k, v in inputs["feature_sparse"].items():
+                try:
+                    # 학습 시 사용된 LabelEncoder로 인코딩
+                    v_encoded = self.encoder[k].transform([v]).item()
+                except Exception as e:
+                    # 학습 시 등장하지 않은 값(unseen)은 "<UNK>"로 대체
+                    print(f"`{e} ({k})")
+                    v_encoded = self.encoder[k].transform(["<UNK>"]).item()
+                feature_sparse[k] = torch.tensor(v_encoded).to(self.device).unsqueeze(0)
 
         # 최종 입력 포맷 구성
         body["inputs"] = {
-            "feature_sequence": feature_sequence,
+            "feature_sequence_sparse": feature_sequence_sparse,
             "masks": masks,
             "feature_sparse": feature_sparse,
         }
