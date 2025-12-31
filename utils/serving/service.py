@@ -19,8 +19,8 @@ root_dir = setup_path()
 # -----------------------------------------------
 # 모델 불러오기
 # -----------------------------------------------
-from models.lightgcn.model import Model as LightGCN
-from models.transformer.model import Model as Transformer
+from models.retrieval.lightgcn.model import Model as LightGCN
+from models.retrieval.transformer.model import Model as Transformer
 
 
 # -----------------------------------------------
@@ -44,8 +44,8 @@ class RecommendationService:
         print("---------- 모델 로딩 시작 ----------")
         try:
             # 1. Transformer 모델 로드
-            seq_model_artifact = bentoml.models.get("transformer:latest")
-            reg_model_artifact = bentoml.models.get("regressor:latest")
+            seq_model_artifact = bentoml.models.get("retrieval_transformer:latest")
+            reg_model_artifact = bentoml.models.get("retrieval_regressor:latest")
             seq_model_dir = Path(seq_model_artifact.path_of("artifact"))
             reg_model_dir = Path(reg_model_artifact.path_of("artifact"))
 
@@ -54,7 +54,7 @@ class RecommendationService:
             )
 
             # 2. LightGCN 모델 로드
-            lightgcn_model_artifact = bentoml.models.get("lightgcn:latest")
+            lightgcn_model_artifact = bentoml.models.get("retrieval_lightgcn:latest")
             lightgcn_model_dir = Path(lightgcn_model_artifact.path_of("artifact"))
             self.model_lightgcn = LightGCN(model_dir=lightgcn_model_dir)
 
@@ -111,9 +111,9 @@ class RecommendationService:
 svc = bentoml.Service(
     "rec_service",
     models=[
-        bentoml.models.get("transformer:latest"),
-        bentoml.models.get("regressor:latest"),
-        bentoml.models.get("lightgcn:latest"),
+        bentoml.models.get("retrieval_transformer:latest"),
+        bentoml.models.get("retrieval_regressor:latest"),
+        bentoml.models.get("retrieval_lightgcn:latest"),
     ],
 )
 
