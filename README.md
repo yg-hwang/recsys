@@ -1,4 +1,5 @@
 # Recommendation System Demo
+- 추천 시스템 구축을 위한 Hands-on 강의용 자료
 
 ## Overview
 

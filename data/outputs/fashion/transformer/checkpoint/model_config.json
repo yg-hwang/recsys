@@ -1,6 +1,6 @@
 {
     "seq_len": 5,
-    "feature_sequence_dims": {
+    "feature_sequence_sparse_dims": {
         "brand_name": 354,
         "gender": 7,
         "age_group": 8,
@@ -20,12 +20,6 @@
         "user_gender": 4
     },
     "feature_dense_dims": {},
-    "action_weights": {
-        "3": 1,
-        "5": 2,
-        "2": 3,
-        "4": 4
-    },
     "embedding_dim": 64,
     "output_dims": {
         "brand_name": 354,
