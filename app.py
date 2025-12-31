@@ -213,7 +213,7 @@ def predict_transformer(
             {
                 "user_id": user_id,
                 "inputs": {
-                    "feature_sequence": feature_sequence,
+                    "feature_sequence_sparse": feature_sequence,
                     "feature_sparse": feature_sparse,
                 },
             }
